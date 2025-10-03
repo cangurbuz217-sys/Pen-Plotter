@@ -67,7 +67,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
    pip install fonttools
    ```
 
-7. Bu depoyu GitHub'dan **Code → Download ZIP** seçeneğiyle indirip `C:\Users\cangu\Desktop` içine çıkarın. Çıkan klasörün adını örneğin `Pen-Plotter` olarak bırakabilirsiniz.
+7. Bu depoyu GitHub'dan **Code → Download ZIP** seçeneğiyle indirip `C:\Users\cangu\Desktop` içine çıkarın. İndirme sayfasında `README.md` dışında `plotter_gui.py`, `single_file_plotter.py` ve `pen_plotter` klasörünü de listede görmeniz gerekir. Yalnızca `README.md` görünüyorsa sayfanın üst kısmındaki **Code** sekmesine dönüp doğru depoya baktığınızdan emin olun ve ardından ZIP arşivini yeniden indirin. Çıkan klasörün adını örneğin `Pen-Plotter` olarak bırakabilirsiniz.
 8. PowerShell penceresinde projenin içine girin:
 
    ```powershell
