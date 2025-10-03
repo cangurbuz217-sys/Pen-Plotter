@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
@@ -489,11 +490,20 @@ def read_text_argument(args: argparse.Namespace, parser: argparse.ArgumentParser
 
 
 def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if not argv:
+        run_interactive_mode()
+        return
+
     parser = build_parser()
     args = parser.parse_args(argv)
-
     text = read_text_argument(args, parser)
+    generate_and_save_gcode(text, args)
 
+
+def generate_and_save_gcode(text: str, args: argparse.Namespace) -> None:
     with SimpleFontLoader(args.font) as font_loader:
         paths = layout_text(
             text,
@@ -534,6 +544,122 @@ def main(argv: list[str] | None = None) -> None:
     gcode_lines = paths_to_gcode(paths, settings)
     args.output.write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
     print(f"G-code '{args.output}' dosyasına yazıldı.")
+
+
+def run_interactive_mode() -> None:
+    print(
+        "\nBu araç komut satırına alışık olmayan kullanıcılar için basitleştirilmiş bir mod sunar."
+    )
+    print(
+        "Adımlar:\n"
+        "1) Bu pencereyi açık tutun.\n"
+        "2) Sorulan bilgileri doldurun.\n"
+        "3) FontTools kurulu değilse otomatik uyarı alacaksınız."
+    )
+
+    text = input("\nYazılacak metni girin: ")
+    while not text.strip():
+        print("Metin boş olamaz. Lütfen tekrar deneyin.")
+        text = input("Yazılacak metni girin: ")
+
+    font_path = _prompt_for_existing_path("TTF font dosyasının tam yolu: ")
+
+    output_path_input = input(
+        "Çıkış G-code dosya adı (varsayılan output.gcode): "
+    ).strip()
+    output_path = Path(output_path_input) if output_path_input else Path("output.gcode")
+
+    font_size = _prompt_float("Yazı boyutu mm (varsayılan 12): ", default=12.0)
+    line_spacing = _prompt_float(
+        "Satır aralığı çarpanı (varsayılan 1.3): ", default=1.3
+    )
+    char_spacing = _prompt_float(
+        "Harfler arası ekstra boşluk mm (varsayılan 0): ", default=0.0
+    )
+    curve_tolerance = _prompt_float(
+        "Eğri doğrultma toleransı mm (varsayılan 0.1): ", default=0.1
+    )
+    travel_height = _prompt_float(
+        "Kalemin boşta yüksekliği mm (varsayılan 5): ", default=5.0
+    )
+    drawing_height = _prompt_float(
+        "Kalemin çizimde yüksekliği mm (varsayılan 0): ", default=0.0
+    )
+    travel_feed = _prompt_float(
+        "Boşta hız mm/dak (varsayılan 3000): ", default=3000.0
+    )
+    drawing_feed = _prompt_float(
+        "Çizim hızı mm/dak (varsayılan 1200): ", default=1200.0
+    )
+    center = _prompt_yes_no("Metni (0,0) etrafında ortalamak ister misiniz? (E/h): ")
+    preview = _prompt_yes_no("Boyut bilgisini görmek ister misiniz? (E/h): ")
+
+    args = argparse.Namespace(
+        text=text,
+        text_file=None,
+        font=font_path,
+        font_size=font_size,
+        line_spacing=line_spacing,
+        char_spacing=char_spacing,
+        curve_tolerance=curve_tolerance,
+        travel_height=travel_height,
+        drawing_height=drawing_height,
+        travel_feed=travel_feed,
+        drawing_feed=drawing_feed,
+        origin_x=0.0,
+        origin_y=0.0,
+        center=center,
+        preview=preview,
+        output=output_path,
+    )
+
+    try:
+        _ensure_fonttools_installed()
+        generate_and_save_gcode(text, args)
+        print("\nİşlem tamamlandı!")
+    except Exception as exc:  # pragma: no cover - interaktif hata raporu
+        print(f"\nBir hata oluştu: {exc}")
+    finally:
+        input("\nPencereyi kapatmak için Enter'a basın...")
+
+
+def _prompt_for_existing_path(prompt: str) -> Path:
+    while True:
+        value = input(prompt).strip().strip('"')
+        if not value:
+            print("Dosya yolu boş olamaz. Lütfen tam .ttf yolunu yazın.")
+            continue
+        path = Path(value).expanduser()
+        if path.exists():
+            return path
+        print("Dosya bulunamadı. Yolun doğru olduğundan emin olun ve tekrar deneyin.")
+
+
+def _prompt_float(prompt: str, default: float) -> float:
+    raw = input(prompt).strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"Geçersiz sayı. Varsayılan değer {default} kullanılacak.")
+        return default
+
+
+def _prompt_yes_no(prompt: str) -> bool:
+    raw = input(prompt).strip().lower()
+    return raw in {"e", "evet", "y"}
+
+
+def _ensure_fonttools_installed() -> None:
+    try:
+        import fontTools  # noqa: F401
+    except ModuleNotFoundError:
+        print(
+            "\nfonttools paketini kurmanız gerekiyor. Aşağıdaki komutu çalıştırın:\n"
+            "pip install fonttools"
+        )
+        raise
 
 
 if __name__ == "__main__":
