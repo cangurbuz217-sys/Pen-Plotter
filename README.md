@@ -38,6 +38,33 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 
 Üretilen G-code dosyasını standart pen plotter veya 3B yazıcı kontrol yazılımlarına aktarabilirsiniz.
 
+## Tek Dosyalık Kullanım (Kopyala & Çalıştır)
+
+Komut satırı ve depo yapısıyla uğraşmak istemiyorsanız `single_file_plotter.py`
+dosyasını açıp içeriğini olduğu gibi kopyalayabilirsiniz. Ardından şu adımları
+izleyin:
+
+1. Bilgisayarınızda Python 3 kurulu olduğundan emin olun.
+2. Boş bir klasör oluşturun ve içerisine yeni bir metin dosyası açıp
+   `plotter.py` adıyla kaydedin.
+3. Bu depodaki `single_file_plotter.py` dosyasının tamamını kopyalayıp
+   `plotter.py` dosyasına yapıştırın.
+4. Terminali/komut istemcisini açıp dosyanın olduğu klasöre gelin.
+5. Gerekli tek kütüphaneyi kurun:
+
+   ```bash
+   pip install fonttools
+   ```
+
+6. Kendi metninizi ve font yolunuzu kullanarak G-code üretin:
+
+   ```bash
+   python plotter.py --text "Merhaba" --font "C:/Fonts/BenimFontum.ttf" --output merhaba.gcode --preview --center
+   ```
+
+Komut sonrasında `merhaba.gcode` dosyası aynı klasörde oluşur. Farklı ayarlar
+için `python plotter.py --help` komutunu çalıştırabilirsiniz.
+
 ## Geliştirme
 
 Modül yapısı:
