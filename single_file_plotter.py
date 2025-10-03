@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Tek dosyalık pen plotter G-code üreticisi.
+"""Tek dosyalık pen plotter G-code üreticisi ve grafik arayüzü.
 
-Bu dosyayı bir yere (örneğin `plotter.py`) kaydedin ve aşağıdaki adımları
-izleyin:
+Kurulum (Windows için önerilen adımlar):
 
-1. Python 3 yüklü olduğundan emin olun.
-2. Terminalde bu dosyanın bulunduğu klasöre gelin.
-3. Gerekli kütüphaneyi kurun: ``pip install fonttools``
-4. Aşağıdaki gibi bir komutla G-code üretin:
+1. Bu dosyanın tamamını örneğin ``C:\\Users\\cangu\\Desktop\\plotter.py``
+   konumuna kaydedin.
+2. ``pip install fonttools`` komutuyla gerekli bağımlılığı yükleyin.
+3. Dosyayı çift tıklayarak ya da ``python plotter.py`` komutuyla çalıştırın.
+4. Açılan "Pen Plotter Studio" penceresinden metni yazın, ``.ttf`` fontu
+   seçin, kalem/Z ayarlarını girin ve G-code çıktısını kaydedin.
 
-   ``python plotter.py --text "Merhaba" --font "/tam/yol/font.ttf" --output ciktim.gcode``
-
-Varsayılan ayarları değiştirmek için `python plotter.py --help` komutunu
-çalıştırabilirsiniz.
+Komut satırı tercih edenler için aynı dosya ``--help`` parametresiyle
+çağrıldığında klasik CLI modu da kullanılabilir.
 """
 from __future__ import annotations
 
@@ -21,6 +20,15 @@ import math
 import sys
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
+
+try:  # Tkinter her sistemde hazır olmayabilir
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except Exception:  # pragma: no cover - GUI dışı ortamlarda
+    tk = None
+    filedialog = None
+    messagebox = None
+    ttk = None
 
 from fontTools.misc import bezierTools
 from fontTools.pens.basePen import BasePen
@@ -494,7 +502,7 @@ def main(argv: list[str] | None = None) -> None:
         argv = sys.argv[1:]
 
     if not argv:
-        run_interactive_mode()
+        run_gui_mode()
         return
 
     parser = build_parser()
@@ -544,6 +552,377 @@ def generate_and_save_gcode(text: str, args: argparse.Namespace) -> None:
     gcode_lines = paths_to_gcode(paths, settings)
     args.output.write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
     print(f"G-code '{args.output}' dosyasına yazıldı.")
+
+
+def run_gui_mode() -> None:
+    """Tkinter tabanlı Pen Plotter Studio arayüzünü başlatır."""
+
+    if tk is None:
+        print(
+            "Bu sistemde Tkinter modülü bulunamadı. Komut satırı moduna geçiliyor."
+        )
+        run_interactive_mode()
+        return
+
+    root = tk.Tk()
+    root.withdraw()
+
+    try:
+        _ensure_fonttools_installed()
+    except ModuleNotFoundError:
+        error_message = (
+            "fonttools paketi bulunamadı. Komut satırında `pip install fonttools` "
+            "komutunu çalıştırıp tekrar deneyin."
+        )
+        if messagebox is not None:
+            messagebox.showerror("Bağımlılık Eksik", error_message)
+        else:
+            print(error_message)
+        root.destroy()
+        return
+
+    root.title("Pen Plotter Studio (Tek Dosya)")
+    root.geometry("980x660")
+    root.minsize(860, 620)
+    root.deiconify()
+
+    try:  # Varsayılan temayı modern bir temayla değiştirmeye çalış
+        style = ttk.Style()
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+    except Exception:  # pragma: no cover - tema hataları önemsiz
+        pass
+
+    main = ttk.Frame(root, padding=12)
+    main.grid(column=0, row=0, sticky="nsew")
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+    main.columnconfigure(0, weight=1)
+    main.columnconfigure(1, weight=0)
+    main.rowconfigure(0, weight=1)
+    main.rowconfigure(1, weight=1)
+
+    text_frame = ttk.LabelFrame(main, text="Metin")
+    text_frame.grid(column=0, row=0, sticky="nsew")
+    text_frame.columnconfigure(0, weight=1)
+    text_frame.rowconfigure(0, weight=1)
+
+    text_widget = tk.Text(text_frame, wrap="word", height=8, font=("Segoe UI", 11))
+    text_widget.grid(column=0, row=0, sticky="nsew")
+    text_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
+    text_scroll.grid(column=1, row=0, sticky="ns")
+    text_widget.configure(yscrollcommand=text_scroll.set)
+    text_widget.insert("1.0", "Pen Plotter Studio\nHoş geldiniz!")
+
+    preview_frame = ttk.LabelFrame(main, text="Önizleme")
+    preview_frame.grid(column=0, row=1, sticky="nsew", pady=(12, 0))
+    preview_frame.columnconfigure(0, weight=1)
+    preview_frame.rowconfigure(0, weight=1)
+
+    CANVAS_WIDTH = 540
+    CANVAS_HEIGHT = 360
+    canvas = tk.Canvas(
+        preview_frame,
+        width=CANVAS_WIDTH,
+        height=CANVAS_HEIGHT,
+        background="#ffffff",
+        highlightthickness=1,
+        highlightbackground="#c7cad1",
+    )
+    canvas.grid(column=0, row=0, sticky="nsew")
+
+    metrics_var = tk.StringVar(value="Font seçip önizleme oluşturun.")
+    metrics_label = ttk.Label(preview_frame, textvariable=metrics_var, anchor="w")
+    metrics_label.grid(column=0, row=1, sticky="ew", pady=(8, 0))
+
+    controls = ttk.LabelFrame(main, text="Ayarlar")
+    controls.grid(column=1, row=0, rowspan=2, sticky="ns", padx=(12, 0))
+    for idx in range(4):
+        controls.rowconfigure(idx, weight=0)
+    controls.columnconfigure(0, weight=1)
+
+    font_path_var = tk.StringVar(value="")
+
+    font_frame = ttk.Frame(controls)
+    font_frame.grid(column=0, row=0, sticky="ew", pady=(0, 12))
+    font_frame.columnconfigure(0, weight=1)
+
+    font_label_var = tk.StringVar(value="Seçilmedi")
+    font_label = ttk.Label(font_frame, textvariable=font_label_var, width=32)
+    font_label.grid(column=0, row=0, sticky="w")
+
+    def select_font() -> None:
+        if filedialog is None:
+            return
+        file_path = filedialog.askopenfilename(
+            title="TrueType font seç",
+            filetypes=[("TrueType Font", "*.ttf"), ("Tüm dosyalar", "*.*")],
+        )
+        if not file_path:
+            return
+        font_path_var.set(file_path)
+        font_label_var.set(Path(file_path).name)
+        refresh_preview(show_dialog=True)
+
+    ttk.Button(font_frame, text="Font Seç (.ttf)", command=select_font).grid(
+        column=0, row=1, sticky="ew", pady=(6, 0)
+    )
+
+    defaults = {
+        "font_size": "14",
+        "line_spacing": "1.3",
+        "char_spacing": "0",
+        "curve_tolerance": "0.1",
+        "origin_x": "0",
+        "origin_y": "0",
+        "travel_height": "5",
+        "drawing_height": "0",
+        "travel_feed": "3000",
+        "drawing_feed": "1200",
+    }
+
+    labels = {
+        "font_size": "Yazı boyutu (mm)",
+        "line_spacing": "Satır aralığı", 
+        "char_spacing": "Harf arası (mm)",
+        "curve_tolerance": "Eğri toleransı (mm)",
+        "origin_x": "X ofseti (mm)",
+        "origin_y": "Y ofseti (mm)",
+        "travel_height": "Kalem yukarı Z (mm)",
+        "drawing_height": "Kalem aşağı Z (mm)",
+        "travel_feed": "Boşta hız (mm/dak)",
+        "drawing_feed": "Çizim hızı (mm/dak)",
+    }
+
+    entry_vars: dict[str, tk.StringVar] = {}
+
+    def add_labeled_entry(row: int, key: str) -> None:
+        label = ttk.Label(controls, text=labels[key])
+        label.grid(column=0, row=row, sticky="w")
+        entry_var = tk.StringVar(value=defaults[key])
+        entry = ttk.Entry(controls, textvariable=entry_var)
+        entry.grid(column=0, row=row + 1, sticky="ew", pady=(0, 8))
+        entry_vars[key] = entry_var
+
+    row_index = 1
+    for field_key in (
+        "font_size",
+        "line_spacing",
+        "char_spacing",
+        "curve_tolerance",
+        "origin_x",
+        "origin_y",
+        "travel_height",
+        "drawing_height",
+        "travel_feed",
+        "drawing_feed",
+    ):
+        add_labeled_entry(row_index, field_key)
+        row_index += 2
+
+    center_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        controls,
+        text="Metni (0,0) etrafında ortala",
+        variable=center_var,
+    ).grid(column=0, row=row_index, sticky="w", pady=(4, 8))
+    row_index += 1
+
+    status_var = tk.StringVar(value="Hazır")
+
+    state: dict[str, object] = {
+        "paths": [],
+        "settings": None,
+        "metrics": None,
+    }
+
+    def parse_float(key: str) -> float:
+        raw = entry_vars[key].get().strip()
+        if not raw:
+            raw = defaults[key]
+        raw = raw.replace(",", ".")
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{labels[key]} için geçerli bir sayı girin.") from exc
+
+    def compute_paths_settings() -> tuple[List[PathType], tuple[float, float, float, float, float], PlotterSettings]:
+        font_path_str = font_path_var.get().strip()
+        if not font_path_str:
+            raise ValueError("Lütfen bir .ttf font dosyası seçin.")
+
+        text_value = text_widget.get("1.0", "end-1c")
+        if not text_value.strip():
+            raise ValueError("Metin alanı boş olamaz.")
+
+        font_path = Path(font_path_str)
+        with SimpleFontLoader(font_path) as font_loader:
+            paths = layout_text(
+                text_value,
+                font_loader,
+                font_size=parse_float("font_size"),
+                line_spacing=parse_float("line_spacing"),
+                character_spacing=parse_float("char_spacing"),
+                curve_tolerance=parse_float("curve_tolerance"),
+            )
+
+        if center_var.get():
+            min_x, min_y, max_x, max_y, _ = measure_paths(paths)
+            center_x = (min_x + max_x) / 2.0
+            center_y = (min_y + max_y) / 2.0
+            paths = translate_paths(paths, -center_x, -center_y)
+
+        origin_x = parse_float("origin_x")
+        origin_y = parse_float("origin_y")
+        if origin_x or origin_y:
+            paths = translate_paths(paths, origin_x, origin_y)
+
+        metrics = measure_paths(paths)
+        comment = f"Pen Plotter Studio GUI - {font_path.name}"[:80]
+        settings = PlotterSettings(
+            travel_height=parse_float("travel_height"),
+            drawing_height=parse_float("drawing_height"),
+            travel_feed_rate=parse_float("travel_feed"),
+            drawing_feed_rate=parse_float("drawing_feed"),
+            comment=comment,
+        )
+        return paths, metrics, settings
+
+    def draw_preview(paths: List[PathType], metrics: tuple[float, float, float, float, float]) -> None:
+        canvas.delete("all")
+        min_x, min_y, max_x, max_y, total_length = metrics
+        width = max_x - min_x
+        height = max_y - min_y
+
+        if not paths or (width == 0 and height == 0):
+            canvas.create_text(
+                CANVAS_WIDTH / 2,
+                CANVAS_HEIGHT / 2,
+                text="Önizleme için metin girin ve font seçin",
+                fill="#6c6f7a",
+            )
+            metrics_var.set("Önizleme hazır değil.")
+            return
+
+        margin = 24
+        scale_x = (CANVAS_WIDTH - margin * 2) / (width if width != 0 else 1)
+        scale_y = (CANVAS_HEIGHT - margin * 2) / (height if height != 0 else 1)
+        scale = min(scale_x, scale_y)
+        if scale <= 0:
+            scale = 1.0
+
+        offset_x = margin - min_x * scale
+        offset_y = margin - min_y * scale
+
+        # Koordinatları Canvas sistemine çevirirken Y eksenini ters çeviriyoruz
+        for path in paths:
+            if len(path) < 2:
+                continue
+            coords: list[float] = []
+            for x, y in path:
+                draw_x = x * scale + offset_x
+                draw_y = CANVAS_HEIGHT - (y * scale + offset_y)
+                coords.extend((draw_x, draw_y))
+            canvas.create_line(coords, fill="#1f77b4", width=2, smooth=False)
+
+        bbox_left = min_x * scale + offset_x
+        bbox_top = CANVAS_HEIGHT - (max_y * scale + offset_y)
+        bbox_right = max_x * scale + offset_x
+        bbox_bottom = CANVAS_HEIGHT - (min_y * scale + offset_y)
+        canvas.create_rectangle(
+            bbox_left,
+            bbox_top,
+            bbox_right,
+            bbox_bottom,
+            outline="#b9bdc6",
+            dash=(4, 3),
+        )
+
+        metrics_var.set(
+            "Genişlik: {:.2f} mm | Yükseklik: {:.2f} mm | Yol uzunluğu: {:.2f} mm".format(
+                width,
+                height,
+                total_length,
+            )
+        )
+
+    def refresh_preview(show_dialog: bool = False) -> None:
+        try:
+            paths, metrics, settings = compute_paths_settings()
+        except Exception as exc:
+            state["paths"] = []
+            state["settings"] = None
+            state["metrics"] = None
+            canvas.delete("all")
+            canvas.create_text(
+                CANVAS_WIDTH / 2,
+                CANVAS_HEIGHT / 2,
+                text=str(exc),
+                fill="#b94a48",
+            )
+            metrics_var.set("Önizleme hazırlanamadı.")
+            status_var.set("Hata: {}".format(exc))
+            if show_dialog and messagebox is not None:
+                messagebox.showerror("Önizleme Hatası", str(exc))
+            return
+
+        state["paths"] = paths
+        state["settings"] = settings
+        state["metrics"] = metrics
+        draw_preview(paths, metrics)
+        status_var.set("Önizleme güncellendi.")
+
+    def save_gcode() -> None:
+        if filedialog is None:
+            return
+        if not state["paths"]:
+            refresh_preview(show_dialog=True)
+            if not state["paths"]:
+                return
+        settings_obj = state["settings"]
+        if not isinstance(settings_obj, PlotterSettings):
+            refresh_preview(show_dialog=True)
+            settings_obj = state["settings"]
+            if not isinstance(settings_obj, PlotterSettings):
+                return
+        file_path = filedialog.asksaveasfilename(
+            title="G-code kaydet",
+            defaultextension=".gcode",
+            filetypes=[("G-code", "*.gcode"), ("Tüm dosyalar", "*.*")],
+        )
+        if not file_path:
+            return
+        gcode_lines = paths_to_gcode(state["paths"], settings_obj)
+        Path(file_path).write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
+        status_var.set(f"G-code kaydedildi: {file_path}")
+        if messagebox is not None:
+            messagebox.showinfo("G-code Kaydedildi", f"Dosya '{file_path}' olarak kaydedildi.")
+
+    button_frame = ttk.Frame(controls)
+    button_frame.grid(column=0, row=row_index + 1, sticky="ew", pady=(12, 0))
+    button_frame.columnconfigure(0, weight=1)
+    button_frame.columnconfigure(1, weight=1)
+
+    ttk.Button(
+        button_frame,
+        text="Önizlemeyi Güncelle",
+        command=lambda: refresh_preview(show_dialog=True),
+    ).grid(column=0, row=0, sticky="ew", padx=(0, 6))
+
+    ttk.Button(
+        button_frame,
+        text="G-code Kaydet",
+        command=save_gcode,
+    ).grid(column=1, row=0, sticky="ew")
+
+    status_label = ttk.Label(main, textvariable=status_var, anchor="w")
+    status_label.grid(column=0, row=2, columnspan=2, sticky="ew", pady=(12, 0))
+
+    # Hızlı klavye kısayolları
+    root.bind("<Control-s>", lambda _event: save_gcode())
+    root.bind("<Control-Return>", lambda _event: refresh_preview(show_dialog=True))
+
+    root.mainloop()
 
 
 def run_interactive_mode() -> None:
