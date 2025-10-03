@@ -4,6 +4,7 @@ Bu depo, TrueType fontları kullanarak istediğiniz metni 3B yazıcı veya pen p
 
 ## Özellikler
 
+- Yeni **Pen Plotter Studio** masaüstü arayüzü; yazınızı küçük bir koordinat sisteminde anında önizleme imkânı sunar.
 - Herhangi bir TTF fontundan bezier konturlarını çizgi segmentlerine dönüştürür.
 - Metni satırlara böler, satır ve karakter aralıklarını ayarlamanıza izin verir.
 - Çıkışı belirlediğiniz koordinatlara taşır veya otomatik olarak merkezler.
@@ -37,6 +38,60 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 - `--preview`: G-code kaydedilmeden önce boyut ve toplam çizim uzunluğunu yazdırır.
 
 Üretilen G-code dosyasını standart pen plotter veya 3B yazıcı kontrol yazılımlarına aktarabilirsiniz.
+
+## Grafik Arayüz: Pen Plotter Studio
+
+`plotter_gui.py` dosyası, 3dwriter.io'dakine benzer bir arayüz sağlar. Yan tarafta metninizi ve ayarları girer, sağdaki önizleme ızgarasında sonuçları anında görür ve istediğiniz `.ttf` fontu yüklemek için özel bir **Font Aç** butonu kullanırsınız.
+
+### Windows 11 için adım adım kurulum (``C:\Users\cangu\Desktop`` baz alınmıştır)
+
+1. [python.org](https://www.python.org/downloads/windows/) adresinden **Windows (64-bit) için Python 3.11** kurulum paketini indirin.
+2. Yükleyiciyi açın, **Add Python to PATH** kutusunu işaretleyin ve kurulumu tamamlayın.
+3. `Win` tuşuna basıp **PowerShell** yazın, sağ tıklayıp **Run as administrator** seçmeden normal olarak açın.
+4. Aşağıdaki komutla masaüstüne gidin:
+
+   ```powershell
+   cd C:\Users\cangu\Desktop
+   ```
+
+5. Proje için izole bir ortam oluşturun ve etkinleştirin:
+
+   ```powershell
+   python -m venv pen-plotter-gui
+   .\pen-plotter-gui\Scripts\Activate.ps1
+   ```
+
+6. Gerekli paketi yükleyin:
+
+   ```powershell
+   pip install fonttools
+   ```
+
+7. Bu depoyu GitHub'dan **Code → Download ZIP** seçeneğiyle indirip `C:\Users\cangu\Desktop` içine çıkarın. Çıkan klasörün adını örneğin `Pen-Plotter` olarak bırakabilirsiniz.
+8. PowerShell penceresinde projenin içine girin:
+
+   ```powershell
+   cd C:\Users\cangu\Desktop\Pen-Plotter
+   ```
+
+9. Grafik arayüzü başlatın:
+
+   ```powershell
+   python plotter_gui.py
+   ```
+
+   İsterseniz aynı klasördeki `plotter_gui.py` dosyasına çift tıklayarak da çalıştırabilirsiniz; program açıldığında kapanmaması için bu komut penceresi açık kalacaktır.
+
+10. Açılan pencerede şu adımları uygulayın:
+    - **Font Aç** butonuna tıklayıp istediğiniz `.ttf` veya `.otf` dosyasını seçin (ör. `C:\Users\cangu\Desktop\Fontlar\el_yazisi.ttf`).
+    - Sol kutuya yazmak istediğiniz metni girin; sağdaki kare ızgarada önizleme hemen güncellenecektir.
+    - Gerekirse font boyutu, satır aralığı, harf aralığı ve eğri toleransı değerlerini değiştirin.
+    - Seyahat/drawing hızları ve Z yüksekliği gibi G-code parametrelerini alt bölümden düzenleyin.
+    - **G-code Kaydet** butonuna bastığınızda, varsayılan olarak masaüstünüze kaydedilecek `.gcode` dosyasının adını belirleyin.
+
+11. Kaydedilen G-code'u pen plotter veya 3B yazıcı yazılımınıza aktarın.
+
+> **İpucu:** Uygulamada **Metni merkezde hizala** seçeneği işaretliyse önizlemede gördüğünüz hizalama aynen G-code çıktısına da uygulanır. Origin X/Y alanlarını kullanarak çıktıyı çalışma yüzeyinizdeki referans noktasına kaydırabilirsiniz.
 
 ## Tek Dosyalık Kullanım (Kopyala & Çalıştır)
 

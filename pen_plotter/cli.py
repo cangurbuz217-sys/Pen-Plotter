@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
-from typing import Iterable, List, Tuple
 
 from .font_paths import FontLoader, LayoutSettings, layout_text
 from .gcode import PlotterSettings, paths_to_gcode
-
-PathType = List[Tuple[float, float]]
+from .geometry import measure_paths, translate_paths
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -120,43 +117,6 @@ def read_text(args: argparse.Namespace) -> str:
     if args.text is None:
         raise SystemExit("Either positional text or --text-file must be provided.")
     return args.text
-
-
-def translate_paths(paths: List[PathType], dx: float, dy: float) -> List[PathType]:
-    if dx == 0.0 and dy == 0.0:
-        return paths
-    return [[(x + dx, y + dy) for x, y in path] for path in paths]
-
-
-def measure_paths(paths: Iterable[PathType]) -> tuple[float, float, float, float, float]:
-    min_x = math.inf
-    min_y = math.inf
-    max_x = -math.inf
-    max_y = -math.inf
-    total_length = 0.0
-
-    for path in paths:
-        if not path:
-            continue
-        prev_x, prev_y = path[0]
-        min_x = min(min_x, prev_x)
-        min_y = min(min_y, prev_y)
-        max_x = max(max_x, prev_x)
-        max_y = max(max_y, prev_y)
-        for x, y in path[1:]:
-            min_x = min(min_x, x)
-            min_y = min(min_y, y)
-            max_x = max(max_x, x)
-            max_y = max(max_y, y)
-            total_length += math.hypot(x - prev_x, y - prev_y)
-            prev_x, prev_y = x, y
-
-    if min_x is math.inf:
-        return 0.0, 0.0, 0.0, 0.0, 0.0
-
-    return min_x, min_y, max_x, max_y, total_length
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
