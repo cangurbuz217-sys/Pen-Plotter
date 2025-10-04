@@ -499,8 +499,9 @@ def _component_fallback_loop(
 
     width = max_x - min_x
     height = max_y - min_y
-    radius = max(width, height, 1.0 / context.px_per_mm) * 0.5
-    radius = max(radius, tolerance * 0.75, 0.15)
+    base_radius = max(width, height, 1.0 / context.px_per_mm) * 0.5
+    min_diameter = max(tolerance * 8.0, 1.5)
+    radius = max(base_radius, min_diameter * 0.5)
 
     circumference = 2.0 * math.pi * radius
     step = max(tolerance * 0.5, 0.3)
