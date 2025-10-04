@@ -371,11 +371,11 @@ def _component_to_path(
     tolerance: float,
 ) -> Path:
     if len(component) < 2:
-        return []
+        return _component_fallback_loop(component, context, tolerance)
 
     graph, weights = _build_component_graph(component)
     if not graph:
-        return []
+        return _component_fallback_loop(component, context, tolerance)
 
     odd_nodes = [
         node
@@ -402,13 +402,49 @@ def _component_to_path(
     mm_points = [context.to_mm(pt) for pt in pixel_path]
     simplified = _simplify_path(mm_points, tolerance * 0.5)
     if len(simplified) < 2:
-        return []
+        return _component_fallback_loop(component, context, tolerance)
 
     resampled = _resample_path(simplified, max(tolerance * 0.5, 0.25))
     if len(resampled) < 2:
-        return simplified
+        return simplified if len(simplified) >= 2 else _component_fallback_loop(
+            component, context, tolerance
+        )
 
     return resampled
+
+
+def _component_fallback_loop(
+    component: Sequence[Tuple[int, int]],
+    context: _RasterContext,
+    tolerance: float,
+) -> Path:
+    if not component:
+        return []
+
+    mm_points = [context.to_mm(pixel) for pixel in component]
+    min_x = min(point[0] for point in mm_points)
+    max_x = max(point[0] for point in mm_points)
+    min_y = min(point[1] for point in mm_points)
+    max_y = max(point[1] for point in mm_points)
+
+    center_x = (min_x + max_x) * 0.5
+    center_y = (min_y + max_y) * 0.5
+
+    width = max_x - min_x
+    height = max_y - min_y
+    radius = max(width, height, 1.0 / context.px_per_mm) * 0.5
+    radius = max(radius, tolerance * 0.75, 0.15)
+
+    circumference = 2.0 * math.pi * radius
+    step = max(tolerance * 0.5, 0.3)
+    segments = max(8, int(math.ceil(circumference / step)))
+
+    loop: Path = []
+    for i in range(segments):
+        angle = (2.0 * math.pi * i) / segments
+        loop.append((center_x + radius * math.cos(angle), center_y + radius * math.sin(angle)))
+    loop.append(loop[0])
+    return loop
 
 
 def _build_component_graph(
