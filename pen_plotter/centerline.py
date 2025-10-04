@@ -149,9 +149,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     if not thinned.any():
         return open_paths
 
-    min_branch_length = max(4, int(round(px_per_mm * 0.45)))
-    if min_branch_length >= 2:
-        _prune_short_branches(thinned, min_branch_length)
+    _prune_short_branches(thinned, px_per_mm, tolerance)
 
     context = _RasterContext(
         min_x=min_x,
@@ -336,11 +334,18 @@ def _opencv_thinning(image: np.ndarray) -> np.ndarray:
         binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN  # type: ignore[attr-defined]
     )
     return (thinned > 0).astype(np.uint8)
-def _prune_short_branches(skeleton: np.ndarray, min_length: int) -> None:
+def _prune_short_branches(
+    skeleton: np.ndarray, px_per_mm: float, tolerance: float
+) -> None:
     """Remove tiny spurs from a skeleton in-place."""
 
     height, width = skeleton.shape
     changed = True
+    min_branch_mm = max(tolerance * 2.0, 0.45)
+    min_length = max(2, int(round(min_branch_mm * px_per_mm)))
+
+    if min_length <= 1:
+        return
 
     while changed:
         changed = False
@@ -500,10 +505,13 @@ def _component_fallback_loop(
     width = max_x - min_x
     height = max_y - min_y
     intrinsic_diameter = max(width, height)
-    min_visible = max(tolerance * 8.0, 1.6)
-    max_visible = max(intrinsic_diameter * 1.8, min_visible)
-    target_diameter = min(max(intrinsic_diameter, min_visible), max_visible)
-    radius = max(target_diameter * 0.5, 0.5 / context.px_per_mm)
+    min_visible = max(tolerance * 5.0, 1.0)
+    max_visible = max(intrinsic_diameter * 1.35, min_visible * 1.5)
+    target_diameter = min(
+        max(intrinsic_diameter * 1.1, min_visible),
+        max_visible,
+    )
+    radius = max(target_diameter * 0.5, 0.45 / context.px_per_mm)
 
     circumference = 2.0 * math.pi * radius
     step = max(tolerance * 0.5, 0.3)
