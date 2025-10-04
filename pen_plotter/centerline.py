@@ -8,6 +8,16 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import numpy as np
 from PIL import Image, ImageDraw
 
+try:  # pragma: no cover - optional dependency
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    cv2 = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency
+    from skimage.morphology import medial_axis as sk_medial_axis
+except Exception:  # pragma: no cover - optional dependency
+    sk_medial_axis = None  # type: ignore
+
 Point = Tuple[float, float]
 Path = List[Point]
 
@@ -61,7 +71,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
         return open_paths
 
     margin_mm = max(0.35, tolerance * 3.0)
-    px_per_mm = min(30.0, max(10.0, 2.5 / max(tolerance, 1e-3)))
+    px_per_mm = min(12.0, max(5.0, 1.2 / max(tolerance, 1e-3)))
 
     width_mm = (max_x - min_x) + 2.0 * margin_mm
     height_mm = (max_y - min_y) + 2.0 * margin_mm
@@ -97,9 +107,32 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     if not bitmap.any():
         return open_paths
 
-    thinned = _zhang_suen_thinning(bitmap)
+    if sk_medial_axis is not None:
+        skeleton_bool = sk_medial_axis(bitmap.astype(bool))
+        if skeleton_bool.any():
+            skeleton = skeleton_bool.astype(np.uint8)
+            context = _RasterContext(
+                min_x=min_x,
+                max_y=max_y,
+                margin_mm=margin_mm,
+                px_per_mm=px_per_mm,
+                height=height_px,
+            )
+            centerlines = _skeleton_to_paths(skeleton, context, tolerance)
+            centerlines = _stitch_paths(centerlines, tolerance)
+            if centerlines:
+                return open_paths + centerlines
+
+    if cv2 is not None and hasattr(cv2, "ximgproc"):
+        thinned = _opencv_thinning(bitmap)
+    else:
+        thinned = _zhang_suen_thinning(bitmap)
     if not thinned.any():
         return open_paths
+
+    min_branch_length = max(3, int(round(px_per_mm * 0.4)))
+    if min_branch_length >= 2:
+        _prune_short_branches(thinned, min_branch_length)
 
     context = _RasterContext(
         min_x=min_x,
@@ -110,6 +143,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     )
 
     centerlines = _skeleton_to_paths(thinned, context, tolerance)
+    centerlines = _stitch_paths(centerlines, tolerance)
     if not centerlines:
         return open_paths
 
@@ -144,75 +178,138 @@ def _signed_area(path: Sequence[Point]) -> float:
 
 
 def _zhang_suen_thinning(image: np.ndarray) -> np.ndarray:
-    skeleton = image.copy()
-    skeleton[skeleton != 0] = 1
+    """Vectorised Zhang-Suen thinning for a binary bitmap."""
+
+    skeleton = (image > 0).astype(np.uint8)
+    if skeleton.size == 0:
+        return skeleton
+
+    padded = np.pad(skeleton, 1, mode="constant", constant_values=0)
+
+    def subiteration(data: np.ndarray, iteration: int) -> bool:
+        center = data[1:-1, 1:-1]
+        if not center.any():
+            return False
+
+        p2 = data[:-2, 1:-1]
+        p3 = data[:-2, 2:]
+        p4 = data[1:-1, 2:]
+        p5 = data[2:, 2:]
+        p6 = data[2:, 1:-1]
+        p7 = data[2:, :-2]
+        p8 = data[1:-1, :-2]
+        p9 = data[:-2, :-2]
+
+        neighbour_sum = (
+            p2
+            + p3
+            + p4
+            + p5
+            + p6
+            + p7
+            + p8
+            + p9
+        )
+
+        stacked = np.stack((p2, p3, p4, p5, p6, p7, p8, p9, p2))
+        transitions = ((stacked[:-1] == 0) & (stacked[1:] == 1)).sum(axis=0)
+
+        condition = (
+            (center == 1)
+            & (neighbour_sum >= 2)
+            & (neighbour_sum <= 6)
+            & (transitions == 1)
+        )
+
+        if iteration == 0:
+            condition &= (p2 * p4 * p6 == 0)
+            condition &= (p4 * p6 * p8 == 0)
+        else:
+            condition &= (p2 * p4 * p8 == 0)
+            condition &= (p2 * p6 * p8 == 0)
+
+        if not condition.any():
+            return False
+
+        center[condition] = 0
+        return True
+
     changed = True
-    rows, cols = skeleton.shape
+    while changed:
+        changed = False
+        if subiteration(padded, 0):
+            changed = True
+        if subiteration(padded, 1):
+            changed = True
+
+    return padded[1:-1, 1:-1]
+
+
+def _opencv_thinning(image: np.ndarray) -> np.ndarray:
+    """Use OpenCV's accelerated thinning when available."""
+
+    binary = (image > 0).astype(np.uint8) * 255
+    thinned = cv2.ximgproc.thinning(  # type: ignore[attr-defined]
+        binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN  # type: ignore[attr-defined]
+    )
+    return (thinned > 0).astype(np.uint8)
+def _prune_short_branches(skeleton: np.ndarray, min_length: int) -> None:
+    """Remove tiny spurs from a skeleton in-place."""
+
+    height, width = skeleton.shape
+    changed = True
 
     while changed:
         changed = False
-        to_remove: List[Tuple[int, int]] = []
-        for y in range(1, rows - 1):
-            for x in range(1, cols - 1):
+        endpoints: List[Tuple[int, int]] = []
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
                 if skeleton[y, x] == 0:
                     continue
-                neighbours = _neighbour_values(skeleton, x, y)
-                transitions = _transitions(neighbours)
-                count = sum(neighbours)
-                if not (2 <= count <= 6 and transitions == 1):
-                    continue
-                if neighbours[0] * neighbours[2] * neighbours[4] != 0:
-                    continue
-                if neighbours[2] * neighbours[4] * neighbours[6] != 0:
-                    continue
-                to_remove.append((x, y))
-        if to_remove:
-            for x, y in to_remove:
-                skeleton[y, x] = 0
-            changed = True
+                neighbours = [
+                    (x + dx, y + dy)
+                    for dx, dy in _NEIGHBOURS
+                    if 0 <= x + dx < width
+                    and 0 <= y + dy < height
+                    and skeleton[y + dy, x + dx] != 0
+                ]
+                if len(neighbours) == 1:
+                    endpoints.append((x, y))
 
-        to_remove = []
-        for y in range(1, rows - 1):
-            for x in range(1, cols - 1):
-                if skeleton[y, x] == 0:
-                    continue
-                neighbours = _neighbour_values(skeleton, x, y)
-                transitions = _transitions(neighbours)
-                count = sum(neighbours)
-                if not (2 <= count <= 6 and transitions == 1):
-                    continue
-                if neighbours[0] * neighbours[2] * neighbours[6] != 0:
-                    continue
-                if neighbours[0] * neighbours[4] * neighbours[6] != 0:
-                    continue
-                to_remove.append((x, y))
-        if to_remove:
-            for x, y in to_remove:
-                skeleton[y, x] = 0
-            changed = True
+        if not endpoints:
+            return
 
-    return skeleton
+        for start in endpoints:
+            x, y = start
+            path: List[Tuple[int, int]] = []
+            previous: Tuple[int, int] | None = None
 
+            for _ in range(min_length):
+                path.append((x, y))
+                neighbours = [
+                    (x + dx, y + dy)
+                    for dx, dy in _NEIGHBOURS
+                    if 0 <= x + dx < width
+                    and 0 <= y + dy < height
+                    and skeleton[y + dy, x + dx] != 0
+                ]
+                if previous is not None and previous in neighbours:
+                    neighbours.remove(previous)
+                if not neighbours:
+                    break
+                if len(neighbours) > 1:
+                    break
+                previous = (x, y)
+                x, y = neighbours[0]
+            else:
+                # Loop completed without breaking meaning spur is long enough.
+                continue
 
-def _neighbour_values(image: np.ndarray, x: int, y: int) -> List[int]:
-    return [
-        int(image[y - 1, x]),
-        int(image[y - 1, x + 1]),
-        int(image[y, x + 1]),
-        int(image[y + 1, x + 1]),
-        int(image[y + 1, x]),
-        int(image[y + 1, x - 1]),
-        int(image[y, x - 1]),
-        int(image[y - 1, x - 1]),
-    ]
-
-
-def _transitions(neighbours: Sequence[int]) -> int:
-    transitions = 0
-    for i in range(len(neighbours)):
-        if neighbours[i] == 0 and neighbours[(i + 1) % len(neighbours)] == 1:
-            transitions += 1
-    return transitions
+            if len(path) <= min_length:
+                for px, py in path:
+                    if skeleton[py, px] != 0:
+                        skeleton[py, px] = 0
+                        changed = True
 
 
 def _skeleton_to_paths(
@@ -246,7 +343,7 @@ def _skeleton_to_paths(
         if len(pixel_points) < 2:
             return
         mm_points = [context.to_mm(pt) for pt in pixel_points]
-        simplified = _simplify_path(mm_points, tolerance * 0.5)
+        simplified = _simplify_path(mm_points, tolerance)
         if _path_length(simplified) < max(0.2, tolerance):
             return
         paths.append(simplified)
@@ -292,6 +389,112 @@ def _skeleton_to_paths(
                 walk(node, neighbour)
 
     return paths
+
+
+def _stitch_paths(paths: List[Path], tolerance: float) -> List[Path]:
+    """Merge adjacent polyline fragments into longer strokes."""
+
+    if not paths:
+        return []
+
+    join_tolerance = max(tolerance * 3.0, 0.3)
+    scale = 1.0 / join_tolerance
+
+    def key(point: Point) -> Tuple[int, int]:
+        return (int(round(point[0] * scale)), int(round(point[1] * scale)))
+
+    from collections import defaultdict
+
+    endpoint_map: Dict[Tuple[int, int], List[Tuple[int, bool]]] = defaultdict(list)
+    start_keys: List[Tuple[int, int] | None] = []
+    end_keys: List[Tuple[int, int] | None] = []
+
+    for index, path in enumerate(paths):
+        if len(path) < 2:
+            start_keys.append(None)
+            end_keys.append(None)
+            continue
+        start = key(path[0])
+        end = key(path[-1])
+        start_keys.append(start)
+        end_keys.append(end)
+        endpoint_map[start].append((index, False))
+        endpoint_map[end].append((index, True))
+
+    used = [False] * len(paths)
+    stitched: List[Path] = []
+
+    def remove_from_map(node_key: Tuple[int, int], entry: Tuple[int, bool]) -> None:
+        entries = endpoint_map.get(node_key)
+        if not entries:
+            return
+        try:
+            entries.remove(entry)
+        except ValueError:
+            return
+        if not entries:
+            endpoint_map.pop(node_key, None)
+
+    def mark_used(idx: int) -> None:
+        used[idx] = True
+        start = start_keys[idx]
+        end = end_keys[idx]
+        if start is not None:
+            remove_from_map(start, (idx, False))
+        if end is not None:
+            remove_from_map(end, (idx, True))
+
+    def pick_candidate(node_key: Tuple[int, int]) -> Tuple[int, bool] | None:
+        options = [entry for entry in endpoint_map.get(node_key, []) if not used[entry[0]]]
+        if not options:
+            return None
+        return max(options, key=lambda entry: len(paths[entry[0]]))
+
+    for idx, path in enumerate(paths):
+        if used[idx] or len(path) < 2:
+            continue
+        current = list(path)
+        mark_used(idx)
+        start_key = start_keys[idx]
+        end_key = end_keys[idx]
+
+        while start_key is not None:
+            candidate = pick_candidate(start_key)
+            if candidate is None:
+                break
+            next_idx, from_end = candidate
+            mark_used(next_idx)
+            next_path = paths[next_idx]
+            if from_end:
+                segment = next_path[:-1]
+                other_key = start_keys[next_idx]
+            else:
+                segment = list(reversed(next_path[1:]))
+                other_key = end_keys[next_idx]
+            if segment:
+                current = segment + current
+            start_key = other_key
+
+        while end_key is not None:
+            candidate = pick_candidate(end_key)
+            if candidate is None:
+                break
+            next_idx, from_end = candidate
+            mark_used(next_idx)
+            next_path = paths[next_idx]
+            if from_end:
+                segment = list(reversed(next_path[:-1]))
+                other_key = start_keys[next_idx]
+            else:
+                segment = next_path[1:]
+                other_key = end_keys[next_idx]
+            if segment:
+                current.extend(segment)
+            end_key = other_key
+
+        stitched.append(current)
+
+    return stitched
 
 
 def _path_length(points: Sequence[Point]) -> float:
