@@ -71,7 +71,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
         return open_paths
 
     margin_mm = max(0.35, tolerance * 3.0)
-    px_per_mm = min(12.0, max(5.0, 1.2 / max(tolerance, 1e-3)))
+    px_per_mm = min(32.0, max(10.0, 2.4 / max(tolerance, 1e-3)))
 
     width_mm = (max_x - min_x) + 2.0 * margin_mm
     height_mm = (max_y - min_y) + 2.0 * margin_mm
@@ -120,6 +120,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
             )
             centerlines = _skeleton_to_paths(skeleton, context, tolerance)
             centerlines = _stitch_paths(centerlines, tolerance)
+            centerlines = _smooth_paths(centerlines, tolerance)
             if centerlines:
                 return open_paths + centerlines
 
@@ -130,7 +131,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     if not thinned.any():
         return open_paths
 
-    min_branch_length = max(3, int(round(px_per_mm * 0.4)))
+    min_branch_length = max(4, int(round(px_per_mm * 0.75)))
     if min_branch_length >= 2:
         _prune_short_branches(thinned, min_branch_length)
 
@@ -144,6 +145,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
 
     centerlines = _skeleton_to_paths(thinned, context, tolerance)
     centerlines = _stitch_paths(centerlines, tolerance)
+    centerlines = _smooth_paths(centerlines, tolerance)
     if not centerlines:
         return open_paths
 
@@ -497,6 +499,58 @@ def _stitch_paths(paths: List[Path], tolerance: float) -> List[Path]:
     return stitched
 
 
+def _smooth_paths(paths: List[Path], tolerance: float) -> List[Path]:
+    if not paths:
+        return []
+
+    smoothed: List[Path] = []
+    simplify_tolerance = max(tolerance * 0.5, 1e-3)
+    dedupe_epsilon = max(tolerance * 0.2, 1e-3)
+
+    for path in paths:
+        if len(path) < 2:
+            continue
+        points = list(path)
+        iterations = 2
+        for _ in range(iterations):
+            if len(points) < 3:
+                break
+            refined: List[Point] = [points[0]]
+            for (x0, y0), (x1, y1) in zip(points, points[1:]):
+                qx = 0.75 * x0 + 0.25 * x1
+                qy = 0.75 * y0 + 0.25 * y1
+                rx = 0.25 * x0 + 0.75 * x1
+                ry = 0.25 * y0 + 0.75 * y1
+                refined.append((qx, qy))
+                refined.append((rx, ry))
+            refined.append(points[-1])
+            points = refined
+
+        simplified = _simplify_path(points, simplify_tolerance)
+        if len(simplified) < 2:
+            continue
+
+        deduped: Path = [simplified[0]]
+        for pt in simplified[1:]:
+            if _distance_sq(deduped[-1], pt) <= dedupe_epsilon ** 2:
+                deduped[-1] = (
+                    0.5 * (deduped[-1][0] + pt[0]),
+                    0.5 * (deduped[-1][1] + pt[1]),
+                )
+            else:
+                deduped.append(pt)
+
+        if len(deduped) < 2:
+            continue
+
+        spacing = max(tolerance * 0.75, 0.4)
+        resampled = _resample_path(deduped, spacing)
+        if len(resampled) >= 2:
+            smoothed.append(resampled)
+
+    return smoothed
+
+
 def _path_length(points: Sequence[Point]) -> float:
     if len(points) < 2:
         return 0.0
@@ -524,6 +578,48 @@ def _simplify_path(points: Sequence[Point], tolerance: float) -> Path:
         right = _simplify_path(points[index:], tolerance)
         return left[:-1] + right
     return [first, last]
+
+
+def _distance_sq(a: Point, b: Point) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    return dx * dx + dy * dy
+
+
+def _resample_path(points: Sequence[Point], spacing: float) -> Path:
+    if spacing <= 0.0 or len(points) < 2:
+        return list(points)
+
+    result: Path = [points[0]]
+    distance_since_last = 0.0
+
+    for start, end in zip(points, points[1:]):
+        seg_len = math.hypot(end[0] - start[0], end[1] - start[1])
+        if seg_len == 0.0:
+            continue
+        direction = ((end[0] - start[0]) / seg_len, (end[1] - start[1]) / seg_len)
+        travelled = 0.0
+
+        while distance_since_last + seg_len - travelled >= spacing - 1e-9:
+            step = spacing - distance_since_last
+            if step <= 1e-9:
+                distance_since_last = 0.0
+                continue
+            travelled += step
+            point = (
+                start[0] + direction[0] * travelled,
+                start[1] + direction[1] * travelled,
+            )
+            if _distance_sq(result[-1], point) > 1e-9:
+                result.append(point)
+            distance_since_last = 0.0
+
+        distance_since_last += seg_len - travelled
+
+    if _distance_sq(result[-1], points[-1]) > 1e-9:
+        result.append(points[-1])
+
+    return result
 
 
 def _point_line_distance(point: Point, start: Point, end: Point) -> float:
