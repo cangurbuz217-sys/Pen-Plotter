@@ -11,6 +11,11 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 try:  # pragma: no cover - optional dependency
+    import networkx as nx  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    nx = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency
     import cv2  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     cv2 = None  # type: ignore
@@ -461,50 +466,56 @@ def _pair_odd_nodes(
             pair_paths[(node, other)] = path
             pair_paths[(other, node)] = list(reversed(path))
 
-    n = len(odd_nodes)
     if not pair_dist:
         return 0.0, []
 
-    from functools import lru_cache
+    used: Dict[Tuple[int, int], bool] = {node: False for node in odd_nodes}
+    chosen_paths: List[List[Tuple[int, int]]] = []
+    total_cost = 0.0
 
-    @lru_cache(None)
-    def solve(mask: int) -> Tuple[float, List[List[Tuple[int, int]]]]:
-        if mask == 0:
-            return 0.0, []
-
-        first_bit = (mask & -mask)
-        first_idx = (first_bit.bit_length() - 1)
-        first_node = odd_nodes[first_idx]
-        best_cost = math.inf
-        best_paths: List[List[Tuple[int, int]]] = []
-
-        remaining = mask ^ (1 << first_idx)
-        candidate_mask = remaining
-        while candidate_mask:
-            bit = candidate_mask & -candidate_mask
-            other_idx = bit.bit_length() - 1
-            other_node = odd_nodes[other_idx]
-            pair_key = (first_node, other_node)
-            if pair_key not in pair_dist:
-                candidate_mask ^= bit
+    if nx is not None:
+        graph_match = nx.Graph()
+        for node in odd_nodes:
+            graph_match.add_node(node)
+        for (node_a, node_b), cost in pair_dist.items():
+            if node_a == node_b:
                 continue
+            if graph_match.has_edge(node_a, node_b):
+                continue
+            graph_match.add_edge(node_a, node_b, weight=cost)
+        matching = nx.algorithms.matching.min_weight_matching(
+            graph_match, weight="weight"
+        )
+        if len(matching) * 2 == len(odd_nodes):
+            for node_a, node_b in matching:
+                if (node_a, node_b) not in pair_paths and (
+                    node_b, node_a
+                ) in pair_paths:
+                    node_a, node_b = node_b, node_a
+                if (node_a, node_b) in pair_paths:
+                    chosen_paths.append(pair_paths[(node_a, node_b)])
+                    total_cost += pair_dist[(node_a, node_b)]
+            if chosen_paths:
+                return total_cost, chosen_paths
 
-            path_cost = pair_dist[pair_key]
-            submask = remaining ^ (1 << other_idx)
-            rest_cost, rest_paths = solve(submask)
-            total_cost = path_cost + rest_cost
-            if total_cost < best_cost:
-                best_cost = total_cost
-                best_paths = rest_paths + [pair_paths[pair_key]]
+    # Greedy fallback if networkx is unavailable
+    edges = sorted(
+        (
+            (cost, node_a, node_b)
+            for (node_a, node_b), cost in pair_dist.items()
+            if node_a < node_b
+        ),
+        key=lambda item: item[0],
+    )
+    for cost, node_a, node_b in edges:
+        if used[node_a] or used[node_b]:
+            continue
+        used[node_a] = True
+        used[node_b] = True
+        chosen_paths.append(pair_paths[(node_a, node_b)])
+        total_cost += cost
 
-            candidate_mask ^= bit
-
-        if best_cost is math.inf:
-            return 0.0, []
-        return best_cost, best_paths
-
-    full_mask = (1 << n) - 1
-    return solve(full_mask)
+    return total_cost, chosen_paths
 
 
 def _dijkstra(
