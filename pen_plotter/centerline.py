@@ -52,6 +52,7 @@ class _RasterContext:
     """Stores coordinate transforms between raster pixels and millimetres."""
 
     min_x: float
+    min_y: float
     max_y: float
     margin_mm: float
     px_per_mm: float
@@ -131,6 +132,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
             skeleton = skeleton_bool.astype(np.uint8)
             context = _RasterContext(
                 min_x=min_x,
+                min_y=min_y,
                 max_y=max_y,
                 margin_mm=margin_mm,
                 px_per_mm=px_per_mm,
@@ -153,6 +155,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
 
     context = _RasterContext(
         min_x=min_x,
+        min_y=min_y,
         max_y=max_y,
         margin_mm=margin_mm,
         px_per_mm=px_per_mm,
@@ -482,6 +485,16 @@ def _component_to_path(
             component, context, tolerance
         )
 
+    min_x, min_y, max_x, max_y = _path_bounds(resampled)
+    extent = max(max_x - min_x, max_y - min_y)
+    min_required = max(tolerance * 5.0, 0.9)
+    glyph_span = context.max_y - context.min_y
+    center_y = (min_y + max_y) * 0.5
+    near_top = glyph_span > 0.0 and (context.max_y - center_y) < glyph_span * 0.3
+    relatively_small = glyph_span > 0.0 and extent < glyph_span * 0.45
+    if extent < min_required or (near_top and relatively_small):
+        return _component_fallback_loop(component, context, tolerance)
+
     return resampled
 
 
@@ -505,12 +518,29 @@ def _component_fallback_loop(
     width = max_x - min_x
     height = max_y - min_y
     intrinsic_diameter = max(width, height)
-    min_visible = max(tolerance * 5.0, 1.0)
-    max_visible = max(intrinsic_diameter * 1.35, min_visible * 1.5)
-    target_diameter = min(
-        max(intrinsic_diameter * 1.1, min_visible),
-        max_visible,
-    )
+    min_visible_base = max(tolerance * 5.0, 1.0)
+    glyph_height = context.max_y - context.min_y
+    is_small_glyph = glyph_height <= min_visible_base * 1.8
+    near_top = glyph_height > 0.0 and (context.max_y - center_y) < glyph_height * 0.3
+    relatively_small = glyph_height > 0.0 and height < glyph_height * 0.45
+    is_top_accent = not is_small_glyph and near_top and relatively_small
+
+    if is_top_accent:
+        min_visible = max(min_visible_base * 0.55, 0.55)
+        max_visible = max(intrinsic_diameter * 1.1, min_visible * 1.05)
+        target_diameter = min(
+            max(intrinsic_diameter * 0.85, min_visible),
+            max_visible,
+            min_visible_base * 0.75,
+        )
+    else:
+        min_visible = max(min_visible_base * 1.2, 1.2)
+        max_visible = max(intrinsic_diameter * 1.9, min_visible * 1.6)
+        target_diameter = min(
+            max(intrinsic_diameter * 1.35, min_visible),
+            max_visible,
+        )
+
     radius = max(target_diameter * 0.5, 0.45 / context.px_per_mm)
 
     circumference = 2.0 * math.pi * radius
@@ -844,7 +874,7 @@ def _smooth_paths(paths: List[Path], tolerance: float) -> List[Path]:
         extent = max(max_x - min_x, max_y - min_y)
 
         tiny_threshold = max(tolerance * 12.0, 1.2)
-        extent_threshold = max(tolerance * 6.0, 0.8)
+        extent_threshold = max(tolerance * 8.0, 1.4)
         if path_length <= tiny_threshold or extent <= extent_threshold:
             smoothed.append(original)
             continue
