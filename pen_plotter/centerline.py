@@ -826,6 +826,17 @@ def _smooth_paths(paths: List[Path], tolerance: float) -> List[Path]:
         if len(path) < 2:
             continue
         points = list(path)
+        original = list(path)
+
+        path_length = _path_length(points)
+        min_x, min_y, max_x, max_y = _path_bounds(points)
+        extent = max(max_x - min_x, max_y - min_y)
+
+        tiny_threshold = max(tolerance * 12.0, 1.2)
+        extent_threshold = max(tolerance * 6.0, 0.8)
+        if path_length <= tiny_threshold or extent <= extent_threshold:
+            smoothed.append(original)
+            continue
         iterations = 2
         for _ in range(iterations):
             if len(points) < 3:
@@ -881,6 +892,21 @@ def _path_length(points: Sequence[Point]) -> float:
     for (x1, y1), (x2, y2) in zip(points, points[1:]):
         length += math.hypot(x2 - x1, y2 - y1)
     return length
+
+
+def _path_bounds(points: Sequence[Point]) -> Tuple[float, float, float, float]:
+    min_x = float("inf")
+    min_y = float("inf")
+    max_x = float("-inf")
+    max_y = float("-inf")
+    for x, y in points:
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+    if min_x == float("inf"):
+        return 0.0, 0.0, 0.0, 0.0
+    return min_x, min_y, max_x, max_y
 
 
 def _simplify_path(points: Sequence[Point], tolerance: float) -> Path:
