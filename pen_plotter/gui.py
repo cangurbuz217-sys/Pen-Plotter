@@ -652,7 +652,57 @@ else:
             y0 = height - offset_y
             y1 = height - (offset_y + bed_y * scale)
 
-            canvas.create_rectangle(x0, y1, x1, y0, outline="#8892a0", fill="#ffffff")
+            canvas.create_rectangle(0, 0, width, height, fill=self.CANVAS_BG, outline="")
+
+            shade_color = "#d9deeb"
+            canvas.create_rectangle(0, 0, width, y1, fill=shade_color, outline="")
+            canvas.create_rectangle(0, y0, width, height, fill=shade_color, outline="")
+            canvas.create_rectangle(0, y1, x0, y0, fill=shade_color, outline="")
+            canvas.create_rectangle(x1, y1, width, y0, fill=shade_color, outline="")
+
+            canvas.create_rectangle(
+                x0,
+                y1,
+                x1,
+                y0,
+                outline="#42526b",
+                width=3,
+                fill="#ffffff",
+            )
+
+            canvas.create_text(
+                x0 + 8,
+                y0 - 6,
+                text="(0,0)",
+                fill="#42526b",
+                anchor="sw",
+                font=("TkDefaultFont", 9, "bold"),
+            )
+            canvas.create_text(
+                x1 - 8,
+                y1 + 10,
+                text=f"X: 0 → {bed_x:.1f} mm\nY: 0 → {bed_y:.1f} mm",
+                fill="#42526b",
+                anchor="ne",
+                font=("TkDefaultFont", 9, "bold"),
+            )
+            canvas.create_text(
+                (x0 + x1) / 2,
+                y0 + 18,
+                text=f"X sınırı: 0 ↔ {bed_x:.1f} mm",
+                fill="#4a5568",
+                anchor="n",
+                font=("TkDefaultFont", 9),
+            )
+            canvas.create_text(
+                x0 - 12,
+                (y0 + y1) / 2,
+                text=f"Y sınırı\n0 ↕ {bed_y:.1f} mm",
+                fill="#4a5568",
+                anchor="e",
+                font=("TkDefaultFont", 9),
+                justify="right",
+            )
 
             grid_step = 10.0
             if bed_x > 0 and bed_y > 0:
