@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import threading
 
 try:  # pragma: no cover - import guard for headless environments
     import tkinter as tk
@@ -131,6 +132,48 @@ else:
         def destroy(self) -> None:
             self.frame.destroy()
 
+    @dataclass
+    class _BlockRequest:
+        uid: int
+        text: str
+        font_size: float
+        line_spacing: float
+        char_spacing: float
+        translation: Tuple[float, float]
+
+    @dataclass
+    class _BlockPreviewData:
+        uid: int
+        paths: List[PathType]
+        bounds: Tuple[float, float, float, float]
+        local_bounds: Optional[Tuple[float, float, float, float]]
+        outside: bool
+        length: float
+
+    @dataclass
+    class _PreviewInputs:
+        font_path: str
+        bed_x: float
+        bed_y: float
+        pen_offset_x: float
+        pen_offset_y: float
+        pen_up: float
+        pen_down: float
+        travel_feed: float
+        drawing_feed: float
+        curve_tolerance: float
+        blocks: List[_BlockRequest]
+
+    @dataclass
+    class _PreviewComputation:
+        inputs: _PreviewInputs
+        block_results: List[_BlockPreviewData]
+        all_paths: List[PathType]
+        metrics: Tuple[float, float, float, float, float]
+        total_length: float
+        settings: PlotterSettings
+        font_name: str
+
     class PenPlotterStudio:
         """Full-featured Pen Plotter Studio interface."""
 
@@ -198,6 +241,11 @@ else:
             self.drag_block: Optional[_GUITextBlock] = None
             self.drag_offset = (0.0, 0.0)
             self._preview_pending = False
+            self._preview_timer: Optional[str] = None
+            self._preview_thread_running = False
+            self._preview_job_counter = 0
+            self._active_preview_id = 0
+            self._force_show_dialog = False
 
             self.last_project_path: Optional[Path] = None
 
@@ -421,202 +469,335 @@ else:
             self.schedule_preview()
 
         def schedule_preview(self) -> None:
-            if self._preview_pending:
-                return
             self._preview_pending = True
-            self.root.after(150, self.force_refresh)
+            if self._preview_timer is None:
+                self._preview_timer = self.root.after(150, self._on_preview_timer)
+
+        def _on_preview_timer(self) -> None:
+            self._preview_timer = None
+            self._start_preview()
 
         def force_refresh(self, show_dialog: bool = False) -> None:
-            self._preview_pending = False
-            font_path_str = self.font_path_var.get()
-            if not font_path_str:
-                self.status_var.set("Lütfen önce bir TTF font seçin.")
-                self.canvas.delete("all")
-                self.metrics_var.set("Önizleme için font seçin.")
-                self.warning_var.set("")
+            if self._preview_timer is not None:
+                self.root.after_cancel(self._preview_timer)
+                self._preview_timer = None
+            self._preview_pending = True
+            self._start_preview(show_dialog=show_dialog)
+
+        def _start_preview(self, show_dialog: bool = False) -> None:
+            if self._preview_thread_running:
+                self._force_show_dialog = self._force_show_dialog or show_dialog
                 return
-
+            if not self._preview_pending and not show_dialog:
+                return
             try:
-                bed_x = self._parse_float(
-                    self.hardware_vars["bed_x"],
-                    self.hardware_labels["bed_x"],
-                    default=self.hardware_defaults_float["bed_x"],
-                )
-                bed_y = self._parse_float(
-                    self.hardware_vars["bed_y"],
-                    self.hardware_labels["bed_y"],
-                    default=self.hardware_defaults_float["bed_y"],
-                )
-                travel_feed = self._parse_float(
-                    self.hardware_vars["travel_feed"],
-                    self.hardware_labels["travel_feed"],
-                    default=self.hardware_defaults_float["travel_feed"],
+                inputs = self._collect_preview_inputs()
+            except Exception as exc:
+                self._preview_pending = False
+                self._display_preview_error(exc, show_dialog or self._force_show_dialog)
+                self._force_show_dialog = False
+                return
+            self._preview_pending = False
+            dialog_flag = show_dialog or self._force_show_dialog
+            self._force_show_dialog = False
+            self._preview_thread_running = True
+            self._preview_job_counter += 1
+            job_id = self._preview_job_counter
+            self._active_preview_id = job_id
+            self.warning_var.set("")
+            self.status_var.set("Önizleme hazırlanıyor...")
+            thread = threading.Thread(
+                target=self._preview_worker,
+                args=(job_id, inputs, dialog_flag),
+                daemon=True,
+            )
+            thread.start()
+
+        def _collect_preview_inputs(self) -> _PreviewInputs:
+            font_path_str = self.font_path_var.get().strip()
+            if not font_path_str:
+                raise ValueError("Lütfen önizleme için bir font seçin.")
+            bed_x = self._parse_float(
+                self.hardware_vars["bed_x"],
+                self.hardware_labels["bed_x"],
+                default=self.hardware_defaults_float["bed_x"],
+                min_value=0.0,
+            )
+            bed_y = self._parse_float(
+                self.hardware_vars["bed_y"],
+                self.hardware_labels["bed_y"],
+                default=self.hardware_defaults_float["bed_y"],
+                min_value=0.0,
+            )
+            travel_feed = self._parse_float(
+                self.hardware_vars["travel_feed"],
+                self.hardware_labels["travel_feed"],
+                default=self.hardware_defaults_float["travel_feed"],
+                min_value=0.0,
+            )
+            drawing_feed = self._parse_float(
+                self.hardware_vars["drawing_feed"],
+                self.hardware_labels["drawing_feed"],
+                default=self.hardware_defaults_float["drawing_feed"],
+                min_value=0.0,
+            )
+            pen_up = self._parse_float(
+                self.hardware_vars["pen_up"],
+                self.hardware_labels["pen_up"],
+                default=self.hardware_defaults_float["pen_up"],
+            )
+            pen_down = self._parse_float(
+                self.hardware_vars["pen_down"],
+                self.hardware_labels["pen_down"],
+                default=self.hardware_defaults_float["pen_down"],
+            )
+            pen_offset_x = self._parse_float(
+                self.hardware_vars["pen_offset_x"],
+                self.hardware_labels["pen_offset_x"],
+                default=self.hardware_defaults_float["pen_offset_x"],
+            )
+            pen_offset_y = self._parse_float(
+                self.hardware_vars["pen_offset_y"],
+                self.hardware_labels["pen_offset_y"],
+                default=self.hardware_defaults_float["pen_offset_y"],
+            )
+            curve_tolerance = self._parse_float(
+                self.curve_tolerance_var,
+                "Eğri toleransı (mm)",
+                default=0.1,
+                min_value=1e-3,
+            )
+
+            block_requests: List[_BlockRequest] = []
+            for block in self.blocks:
+                text = block.text_widget.get("1.0", "end-1c")
+                if not text.strip():
+                    block.local_bounds = None
+                    block.current_bounds = None
+                    continue
+                font_size = self._parse_float(
+                    block.font_size_var,
+                    "Boyut (mm)",
+                    default=14.0,
                     min_value=0.0,
                 )
-                drawing_feed = self._parse_float(
-                    self.hardware_vars["drawing_feed"],
-                    self.hardware_labels["drawing_feed"],
-                    default=self.hardware_defaults_float["drawing_feed"],
+                line_spacing = self._parse_float(
+                    block.line_spacing_var,
+                    "Satır aralığı",
+                    default=1.3,
                     min_value=0.0,
                 )
-                pen_up = self._parse_float(
-                    self.hardware_vars["pen_up"],
-                    self.hardware_labels["pen_up"],
-                    default=self.hardware_defaults_float["pen_up"],
-                )
-                pen_down = self._parse_float(
-                    self.hardware_vars["pen_down"],
-                    self.hardware_labels["pen_down"],
-                    default=self.hardware_defaults_float["pen_down"],
-                )
-                pen_offset_x = self._parse_float(
-                    self.hardware_vars["pen_offset_x"],
-                    self.hardware_labels["pen_offset_x"],
-                    default=self.hardware_defaults_float["pen_offset_x"],
-                )
-                pen_offset_y = self._parse_float(
-                    self.hardware_vars["pen_offset_y"],
-                    self.hardware_labels["pen_offset_y"],
-                    default=self.hardware_defaults_float["pen_offset_y"],
-                )
-                curve_tolerance = self._parse_float(
-                    self.curve_tolerance_var,
-                    "Eğri toleransı (mm)",
-                    default=0.1,
-                    min_value=1e-3,
+                char_spacing = self._parse_float(
+                    block.char_spacing_var,
+                    "Harf boşluğu (mm)",
+                    default=0.0,
                 )
 
-                self.current_bed_size = (bed_x, bed_y)
-                self.preview_pen_offset = (pen_offset_x, pen_offset_y)
+                block_requests.append(
+                    _BlockRequest(
+                        uid=block.uid,
+                        text=text,
+                        font_size=font_size,
+                        line_spacing=line_spacing,
+                        char_spacing=char_spacing,
+                        translation=(block.translation_x, block.translation_y),
+                    )
+                )
 
-                block_results: List[
-                    Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
-                ] = []
+            if not block_requests:
+                raise ValueError("En az bir metin bloğu dolu olmalıdır.")
+
+            return _PreviewInputs(
+                font_path=font_path_str,
+                bed_x=bed_x,
+                bed_y=bed_y,
+                pen_offset_x=pen_offset_x,
+                pen_offset_y=pen_offset_y,
+                pen_up=pen_up,
+                pen_down=pen_down,
+                travel_feed=travel_feed,
+                drawing_feed=drawing_feed,
+                curve_tolerance=curve_tolerance,
+                blocks=block_requests,
+            )
+
+        def _preview_worker(
+            self, job_id: int, inputs: _PreviewInputs, show_dialog: bool
+        ) -> None:
+            try:
+                block_results: List[_BlockPreviewData] = []
                 all_paths: List[PathType] = []
                 total_length = 0.0
-                outside_blocks: List[_GUITextBlock] = []
-
-                with FontLoader(font_path_str) as font_loader:
-                    for block in self.blocks:
-                        text = block.text_widget.get("1.0", "end-1c")
-                        if not text.strip():
-                            block.local_bounds = None
-                            block.current_bounds = None
-                            continue
-                        font_size = self._parse_float(
-                            block.font_size_var,
-                            "Boyut (mm)",
-                            default=14.0,
-                            min_value=0.0,
-                        )
-                        line_spacing = self._parse_float(
-                            block.line_spacing_var,
-                            "Satır aralığı",
-                            default=1.3,
-                            min_value=0.0,
-                        )
-                        char_spacing = self._parse_float(
-                            block.char_spacing_var,
-                            "Harf boşluğu (mm)",
-                            default=0.0,
-                        )
-
+                with FontLoader(inputs.font_path) as font_loader:
+                    for request in inputs.blocks:
                         layout_settings = LayoutSettings(
-                            font_size=font_size,
-                            line_spacing=line_spacing,
-                            character_spacing=char_spacing,
-                            curve_tolerance=curve_tolerance,
+                            font_size=request.font_size,
+                            line_spacing=request.line_spacing,
+                            character_spacing=request.char_spacing,
+                            curve_tolerance=inputs.curve_tolerance,
                             stroke_mode="centerline",
                         )
-                        raw_paths = layout_text(text, font_loader, layout_settings)
-                        raw_bounds = measure_paths(raw_paths)
-                        block.local_bounds = raw_bounds[:4]
-
+                        raw_paths = layout_text(request.text, font_loader, layout_settings)
+                        local_bounds = (
+                            measure_paths(raw_paths)[:4] if raw_paths else None
+                        )
                         translated_paths = translate_paths(
                             raw_paths,
-                            block.translation_x,
-                            block.translation_y,
+                            request.translation[0],
+                            request.translation[1],
                         )
-                        translated_bounds = measure_paths(translated_paths)
-                        if translated_bounds[4] == 0.0:
-                            block.current_bounds = None
+                        translated_metrics = measure_paths(translated_paths)
+                        length = translated_metrics[4]
+                        if length == 0.0:
                             continue
-                        bounds_rect = translated_bounds[:4]
-                        block.current_bounds = bounds_rect
-                        block.update_position_label()
-
+                        bounds_rect = translated_metrics[:4]
                         outside = (
                             bounds_rect[0] < -1e-3
                             or bounds_rect[1] < -1e-3
-                            or bounds_rect[2] > bed_x + 1e-3
-                            or bounds_rect[3] > bed_y + 1e-3
+                            or bounds_rect[2] > inputs.bed_x + 1e-3
+                            or bounds_rect[3] > inputs.bed_y + 1e-3
                         )
-                        if outside:
-                            outside_blocks.append(block)
-
-                        block_results.append((block, translated_paths, bounds_rect, outside))
+                        block_results.append(
+                            _BlockPreviewData(
+                                uid=request.uid,
+                                paths=translated_paths,
+                                bounds=bounds_rect,
+                                local_bounds=local_bounds,
+                                outside=outside,
+                                length=length,
+                            )
+                        )
                         all_paths.extend(translated_paths)
-                        total_length += translated_bounds[4]
+                        total_length += length
 
                 if not all_paths:
                     raise ValueError("En az bir metin bloğu dolu olmalıdır.")
 
                 combined_metrics = measure_paths(all_paths)
-                comment = f"Pen Plotter Studio - {Path(font_path_str).name}"[:80]
+                comment = f"Pen Plotter Studio - {Path(inputs.font_path).name}"[:80]
                 settings = PlotterSettings(
-                    travel_height=pen_up,
-                    drawing_height=pen_down,
-                    travel_feed_rate=travel_feed,
-                    drawing_feed_rate=drawing_feed,
+                    travel_height=inputs.pen_up,
+                    drawing_height=inputs.pen_down,
+                    travel_feed_rate=inputs.travel_feed,
+                    drawing_feed_rate=inputs.drawing_feed,
                     comment=comment,
                 )
-
-                self.preview_paths = all_paths
-                self.preview_settings = settings
-                self.preview_metrics = combined_metrics
-
-                self._draw_preview(bed_x, bed_y, block_results)
-                width = combined_metrics[2] - combined_metrics[0]
-                height = combined_metrics[3] - combined_metrics[1]
-                self.metrics_var.set(
-                    "Genişlik: {:.2f} mm | Yükseklik: {:.2f} mm | Yol uzunluğu: {:.2f} mm".format(
-                        width,
-                        height,
-                        total_length,
-                    )
+                preview = _PreviewComputation(
+                    inputs=inputs,
+                    block_results=block_results,
+                    all_paths=all_paths,
+                    metrics=combined_metrics,
+                    total_length=total_length,
+                    settings=settings,
+                    font_name=Path(inputs.font_path).name,
                 )
-                if outside_blocks:
-                    block_names = ", ".join(block.header_var.get() for block in outside_blocks)
-                    if len(outside_blocks) == 1:
-                        warning_text = (
-                            f"Uyarı: {block_names} çalışma alanının dışında."
-                        )
-                    else:
-                        warning_text = (
-                            f"Uyarı: Metin blokları çalışma alanının dışında: {block_names}"
-                        )
-                    self.warning_var.set(warning_text)
-                    self.status_var.set(warning_text)
-                else:
-                    self.warning_var.set("")
-                    self.status_var.set("Önizleme güncellendi.")
+                self.root.after(
+                    0,
+                    lambda: self._apply_preview_result(job_id, preview, show_dialog),
+                )
             except Exception as exc:
-                self.preview_paths = []
-                self.preview_settings = None
-                self.preview_metrics = None
-                self.block_bounds_mm.clear()
-                self.canvas.delete("all")
-                self.canvas.create_text(
-                    self.canvas_width / 2,
-                    self.canvas_height / 2,
-                    text=str(exc),
-                    fill="#b94a48",
+                self.root.after(
+                    0,
+                    lambda: self._apply_preview_error(job_id, exc, show_dialog),
                 )
-                self.metrics_var.set("Önizleme hazırlanamadı.")
-                self.status_var.set(f"Hata: {exc}")
+
+        def _apply_preview_result(
+            self, job_id: int, data: _PreviewComputation, show_dialog: bool
+        ) -> None:
+            if job_id != self._active_preview_id:
+                return
+            self._preview_thread_running = False
+
+            inputs = data.inputs
+            self.preview_paths = data.all_paths
+            self.preview_settings = data.settings
+            self.preview_metrics = data.metrics
+            self.preview_pen_offset = (inputs.pen_offset_x, inputs.pen_offset_y)
+            self.current_bed_size = (inputs.bed_x, inputs.bed_y)
+
+            self.block_bounds_mm.clear()
+            block_map = {block.uid: block for block in self.blocks}
+            outside_blocks: List[_GUITextBlock] = []
+            render_blocks: List[
+                Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
+            ] = []
+            seen: set[int] = set()
+
+            for block_data in data.block_results:
+                block = block_map.get(block_data.uid)
+                if block is None:
+                    continue
+                seen.add(block.uid)
+                block.local_bounds = block_data.local_bounds
+                block.current_bounds = block_data.bounds
+                block.update_position_label()
+                self.block_bounds_mm[block.uid] = block_data.bounds
+                render_blocks.append(
+                    (block, block_data.paths, block_data.bounds, block_data.outside)
+                )
+                if block_data.outside:
+                    outside_blocks.append(block)
+
+            for block in self.blocks:
+                if block.uid not in seen:
+                    block.local_bounds = None
+                    block.current_bounds = None
+                    self.block_bounds_mm.pop(block.uid, None)
+
+            self._draw_preview(inputs.bed_x, inputs.bed_y, render_blocks)
+            width = data.metrics[2] - data.metrics[0]
+            height = data.metrics[3] - data.metrics[1]
+            self.metrics_var.set(
+                "Genişlik: {:.2f} mm | Yükseklik: {:.2f} mm | Yol uzunluğu: {:.2f} mm".format(
+                    width,
+                    height,
+                    data.total_length,
+                )
+            )
+            if outside_blocks:
+                block_names = ", ".join(block.header_var.get() for block in outside_blocks)
+                if len(outside_blocks) == 1:
+                    warning_text = f"Uyarı: {block_names} çalışma alanının dışında."
+                else:
+                    warning_text = (
+                        f"Uyarı: Metin blokları çalışma alanının dışında: {block_names}"
+                    )
+                self.warning_var.set(warning_text)
+                self.status_var.set(warning_text)
+            else:
                 self.warning_var.set("")
-                if show_dialog and messagebox is not None:
-                    messagebox.showerror("Önizleme hatası", str(exc))
+                self.status_var.set(f"Önizleme güncellendi ({data.font_name}).")
+
+            if self._preview_pending:
+                self.root.after(50, self._start_preview)
+
+        def _apply_preview_error(
+            self, job_id: int, exc: Exception, show_dialog: bool
+        ) -> None:
+            if job_id != self._active_preview_id:
+                return
+            self._preview_thread_running = False
+            self._display_preview_error(exc, show_dialog)
+            if self._preview_pending:
+                self.root.after(150, self._start_preview)
+
+        def _display_preview_error(self, exc: Exception, show_dialog: bool) -> None:
+            self.preview_paths = []
+            self.preview_settings = None
+            self.preview_metrics = None
+            self.block_bounds_mm.clear()
+            self.canvas.delete("all")
+            self.canvas.create_text(
+                self.canvas_width / 2,
+                self.canvas_height / 2,
+                text=str(exc),
+                fill="#b94a48",
+            )
+            self.metrics_var.set("Önizleme hazırlanamadı.")
+            self.status_var.set(f"Hata: {exc}")
+            self.warning_var.set("")
+            if show_dialog and messagebox is not None:
+                messagebox.showerror("Önizleme hatası", str(exc))
 
         def _draw_preview(
             self,
