@@ -66,14 +66,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--travel-feed",
         type=float,
-        default=3000.0,
-        help="Feed rate (mm/min) for travel moves.",
+        default=50.0,
+        help="Feed rate (mm/s) for travel moves.",
     )
     parser.add_argument(
         "--drawing-feed",
         type=float,
-        default=1200.0,
-        help="Feed rate (mm/min) for drawing moves.",
+        default=20.0,
+        help="Feed rate (mm/s) for drawing moves.",
     )
     parser.add_argument(
         "--origin-x",
