@@ -243,18 +243,43 @@ else:
             self._add_hardware_entry(hardware_frame, "travel_feed", 3, 0)
             self._add_hardware_entry(hardware_frame, "drawing_feed", 3, 1)
 
+            tolerance_row = 8
             ttk.Label(hardware_frame, text="Eğri toleransı (mm)").grid(
                 column=0,
-                row=4,
+                row=tolerance_row,
+                columnspan=2,
                 sticky="w",
                 pady=(8, 0),
             )
             ttk.Entry(hardware_frame, textvariable=self.curve_tolerance_var, width=8).grid(
                 column=0,
-                row=5,
+                row=tolerance_row + 1,
+                columnspan=2,
                 sticky="ew",
                 pady=(0, 8),
             )
+
+            control_buttons = ttk.Frame(hardware_frame)
+            control_buttons.grid(
+                column=0,
+                row=tolerance_row + 2,
+                columnspan=2,
+                sticky="ew",
+                pady=(0, 0),
+            )
+            control_buttons.columnconfigure(0, weight=1)
+            control_buttons.columnconfigure(1, weight=1)
+
+            ttk.Button(
+                control_buttons,
+                text="Kalemi yukarı",
+                command=self.show_pen_up_command,
+            ).grid(column=0, row=0, sticky="ew", padx=(0, 6))
+            ttk.Button(
+                control_buttons,
+                text="Kalemi aşağı",
+                command=self.show_pen_down_command,
+            ).grid(column=1, row=0, sticky="ew")
             self.curve_tolerance_var.trace_add("write", lambda *_: self.schedule_preview())
 
             font_frame = ttk.LabelFrame(controls, text="Your text")
@@ -362,6 +387,59 @@ else:
             entry = ttk.Entry(parent, textvariable=self.hardware_vars[key], width=10)
             entry.grid(column=column, row=row * 2 + 1, sticky="ew", padx=(0, 8), pady=(0, 4))
             entry.bind("<KeyRelease>", lambda _event: self.schedule_preview())
+
+        def show_pen_up_command(self) -> None:
+            self._show_pen_move(
+                height_key="pen_up",
+                feed_key="travel_feed",
+                command="G0",
+                label="Kalem yukarı",
+            )
+
+        def show_pen_down_command(self) -> None:
+            self._show_pen_move(
+                height_key="pen_down",
+                feed_key="travel_feed",
+                command="G1",
+                label="Kalem aşağı",
+            )
+
+        def _show_pen_move(
+            self,
+            *,
+            height_key: str,
+            feed_key: str,
+            command: str,
+            label: str,
+        ) -> None:
+            try:
+                height = self._parse_float(
+                    self.hardware_vars[height_key],
+                    self.hardware_labels[height_key],
+                    default=self.hardware_defaults_float[height_key],
+                )
+                feed_rate = self._parse_float(
+                    self.hardware_vars[feed_key],
+                    self.hardware_labels[feed_key],
+                    default=self.hardware_defaults_float[feed_key],
+                    min_value=0.0,
+                )
+            except ValueError as exc:
+                self.status_var.set(f"Hata: {exc}")
+                if messagebox is not None:
+                    messagebox.showerror("Değer hatası", str(exc))
+                return
+
+            feed_mm_min = feed_rate * 60.0
+            command_str = f"{command} Z{height:.3f} F{feed_mm_min:.2f}"
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(command_str)
+                clipboard_note = " (panoya kopyalandı)"
+            except tk.TclError:
+                clipboard_note = ""
+
+            self.status_var.set(f"{label} komutu: {command_str}{clipboard_note}")
 
         # ---------------------------------------------------------- Block mgmt --
         def add_block(self, initial_text: str = "") -> None:
