@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import heapq
+from collections import deque
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -30,6 +32,13 @@ _NEIGHBOURS = [
     (1, -1),
     (1, 0),
     (1, 1),
+]
+
+_PRIMARY_NEIGHBOURS = [
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (1, -1),
 ]
 
 
@@ -318,79 +327,271 @@ def _skeleton_to_paths(
     skeleton: np.ndarray, context: _RasterContext, tolerance: float
 ) -> List[Path]:
     height, width = skeleton.shape
-    node_neighbors: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+    visited: set[Tuple[int, int]] = set()
+    component_paths: List[Path] = []
+
     for y in range(height):
         for x in range(width):
-            if skeleton[y, x] == 0:
+            if skeleton[y, x] == 0 or (x, y) in visited:
                 continue
-            neighbours: List[Tuple[int, int]] = []
-            for dx, dy in _NEIGHBOURS:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < width and 0 <= ny < height and skeleton[ny, nx] != 0:
-                    neighbours.append((nx, ny))
-            if not neighbours:
-                continue
-            node_neighbors[(x, y)] = neighbours
 
-    if not node_neighbors:
+            queue: deque[Tuple[int, int]] = deque([(x, y)])
+            visited.add((x, y))
+            component: List[Tuple[int, int]] = []
+
+            while queue:
+                px, py = queue.popleft()
+                component.append((px, py))
+                for dx, dy in _NEIGHBOURS:
+                    nx, ny = px + dx, py + dy
+                    if (
+                        0 <= nx < width
+                        and 0 <= ny < height
+                        and skeleton[ny, nx] != 0
+                        and (nx, ny) not in visited
+                    ):
+                        visited.add((nx, ny))
+                        queue.append((nx, ny))
+
+            path = _component_to_path(component, context, tolerance)
+            if len(path) >= 2:
+                component_paths.append(path)
+
+    return component_paths
+
+
+def _component_to_path(
+    component: Sequence[Tuple[int, int]],
+    context: _RasterContext,
+    tolerance: float,
+) -> Path:
+    if len(component) < 2:
         return []
 
-    visited_edges: set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
-    paths: List[Path] = []
+    graph, weights = _build_component_graph(component)
+    if not graph:
+        return []
 
-    def as_edge(a: Tuple[int, int], b: Tuple[int, int]) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-        return (a, b) if a <= b else (b, a)
-
-    def record_path(pixel_points: List[Tuple[int, int]]) -> None:
-        if len(pixel_points) < 2:
-            return
-        mm_points = [context.to_mm(pt) for pt in pixel_points]
-        simplified = _simplify_path(mm_points, tolerance)
-        if _path_length(simplified) < max(0.2, tolerance):
-            return
-        paths.append(simplified)
-
-    def walk(start: Tuple[int, int], next_node: Tuple[int, int]) -> None:
-        pixel_path = [start]
-        current = start
-        previous = None
-        while True:
-            edge = as_edge(current, next_node)
-            if edge in visited_edges:
-                break
-            visited_edges.add(edge)
-            pixel_path.append(next_node)
-            neighbours = [n for n in node_neighbors[next_node] if n != current]
-            if len(neighbours) != 1:
-                record_path(pixel_path)
-                if neighbours:
-                    for neighbour in neighbours:
-                        if as_edge(next_node, neighbour) not in visited_edges:
-                            walk(next_node, neighbour)
-                return
-            previous, current = current, next_node
-            next_node = neighbours[0]
-
-        record_path(pixel_path)
-
-    endpoints = [
+    odd_nodes = [
         node
-        for node, neighbours in node_neighbors.items()
-        if len(neighbours) == 1
+        for node, neighbours in graph.items()
+        if sum(neighbours.values()) % 2 == 1
     ]
 
-    for node in endpoints:
-        for neighbour in node_neighbors[node]:
-            if as_edge(node, neighbour) not in visited_edges:
-                walk(node, neighbour)
+    _, augmentation_paths = _pair_odd_nodes(graph, weights, odd_nodes)
+    for path in augmentation_paths:
+        for a, b in zip(path, path[1:]):
+            graph[a][b] = graph[a].get(b, 0) + 1
+            graph[b][a] = graph[b].get(a, 0) + 1
 
-    for node, neighbours in node_neighbors.items():
-        if len(neighbours) == 2:
-            neighbour = neighbours[0]
-            if as_edge(node, neighbour) not in visited_edges:
-                walk(node, neighbour)
+    start_node: Tuple[int, int]
+    if odd_nodes:
+        start_node = odd_nodes[0]
+    else:
+        start_node = next(iter(graph.keys()))
 
-    return paths
+    pixel_path = _eulerian_path(graph, start_node)
+    if len(pixel_path) < 2:
+        return []
+
+    mm_points = [context.to_mm(pt) for pt in pixel_path]
+    simplified = _simplify_path(mm_points, tolerance * 0.5)
+    if len(simplified) < 2:
+        return []
+
+    resampled = _resample_path(simplified, max(tolerance * 0.5, 0.25))
+    if len(resampled) < 2:
+        return simplified
+
+    return resampled
+
+
+def _build_component_graph(
+    component: Sequence[Tuple[int, int]]
+) -> Tuple[
+    Dict[Tuple[int, int], Dict[Tuple[int, int], int]],
+    Dict[Tuple[Tuple[int, int], Tuple[int, int]], float],
+]:
+    component_set = set(component)
+    if len(component_set) < 2:
+        return {}, {}
+
+    graph: Dict[Tuple[int, int], Dict[Tuple[int, int], int]] = {
+        node: {} for node in component_set
+    }
+    weights: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = {}
+
+    for x, y in component_set:
+        for dx, dy in _PRIMARY_NEIGHBOURS:
+            nx, ny = x + dx, y + dy
+            neighbour = (nx, ny)
+            if neighbour not in component_set:
+                continue
+            weight = math.hypot(dx, dy)
+            graph[(x, y)][neighbour] = graph[(x, y)].get(neighbour, 0) + 1
+            graph[neighbour][(x, y)] = graph[neighbour].get((x, y), 0) + 1
+            weights[((x, y), neighbour)] = weight
+            weights[(neighbour, (x, y))] = weight
+
+    graph = {node: neighbours for node, neighbours in graph.items() if neighbours}
+    return graph, weights
+
+
+def _pair_odd_nodes(
+    graph: Dict[Tuple[int, int], Dict[Tuple[int, int], int]],
+    weights: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float],
+    odd_nodes: Sequence[Tuple[int, int]],
+) -> Tuple[float, List[List[Tuple[int, int]]]]:
+    if len(odd_nodes) < 2:
+        return 0.0, []
+
+    pair_dist: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = {}
+    pair_paths: Dict[Tuple[Tuple[int, int], Tuple[int, int]], List[Tuple[int, int]]] = {}
+
+    for node in odd_nodes:
+        distances, previous = _dijkstra(graph, weights, node)
+        for other in odd_nodes:
+            if other == node or other not in distances:
+                continue
+            path = _reconstruct_path(previous, other, node)
+            if len(path) < 2:
+                continue
+            pair_dist[(node, other)] = distances[other]
+            pair_dist[(other, node)] = distances[other]
+            pair_paths[(node, other)] = path
+            pair_paths[(other, node)] = list(reversed(path))
+
+    n = len(odd_nodes)
+    if not pair_dist:
+        return 0.0, []
+
+    from functools import lru_cache
+
+    @lru_cache(None)
+    def solve(mask: int) -> Tuple[float, List[List[Tuple[int, int]]]]:
+        if mask == 0:
+            return 0.0, []
+
+        first_bit = (mask & -mask)
+        first_idx = (first_bit.bit_length() - 1)
+        first_node = odd_nodes[first_idx]
+        best_cost = math.inf
+        best_paths: List[List[Tuple[int, int]]] = []
+
+        remaining = mask ^ (1 << first_idx)
+        candidate_mask = remaining
+        while candidate_mask:
+            bit = candidate_mask & -candidate_mask
+            other_idx = bit.bit_length() - 1
+            other_node = odd_nodes[other_idx]
+            pair_key = (first_node, other_node)
+            if pair_key not in pair_dist:
+                candidate_mask ^= bit
+                continue
+
+            path_cost = pair_dist[pair_key]
+            submask = remaining ^ (1 << other_idx)
+            rest_cost, rest_paths = solve(submask)
+            total_cost = path_cost + rest_cost
+            if total_cost < best_cost:
+                best_cost = total_cost
+                best_paths = rest_paths + [pair_paths[pair_key]]
+
+            candidate_mask ^= bit
+
+        if best_cost is math.inf:
+            return 0.0, []
+        return best_cost, best_paths
+
+    full_mask = (1 << n) - 1
+    return solve(full_mask)
+
+
+def _dijkstra(
+    graph: Dict[Tuple[int, int], Dict[Tuple[int, int], int]],
+    weights: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float],
+    start: Tuple[int, int],
+) -> Tuple[Dict[Tuple[int, int], float], Dict[Tuple[int, int], Tuple[int, int]]]:
+    distances: Dict[Tuple[int, int], float] = {start: 0.0}
+    previous: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    heap: List[Tuple[float, Tuple[int, int]]] = [(0.0, start)]
+
+    while heap:
+        dist, node = heapq.heappop(heap)
+        if dist > distances.get(node, math.inf):
+            continue
+        for neighbour, count in graph.get(node, {}).items():
+            if count <= 0:
+                continue
+            weight = weights.get((node, neighbour))
+            if weight is None:
+                continue
+            new_dist = dist + weight
+            if new_dist + 1e-12 < distances.get(neighbour, math.inf):
+                distances[neighbour] = new_dist
+                previous[neighbour] = node
+                heapq.heappush(heap, (new_dist, neighbour))
+
+    return distances, previous
+
+
+def _reconstruct_path(
+    previous: Dict[Tuple[int, int], Tuple[int, int]],
+    target: Tuple[int, int],
+    start: Tuple[int, int],
+) -> List[Tuple[int, int]]:
+    if target not in previous and target != start:
+        return []
+    node = target
+    path: List[Tuple[int, int]] = [node]
+    while node != start:
+        node = previous.get(node)
+        if node is None:
+            return []
+        path.append(node)
+    path.reverse()
+    return path
+
+
+def _eulerian_path(
+    graph: Dict[Tuple[int, int], Dict[Tuple[int, int], int]],
+    start: Tuple[int, int],
+) -> List[Tuple[int, int]]:
+    if start not in graph:
+        return []
+
+    adjacency: Dict[Tuple[int, int], Dict[Tuple[int, int], int]] = {
+        node: dict(neighbours) for node, neighbours in graph.items()
+    }
+
+    stack: List[Tuple[int, int]] = [start]
+    circuit: List[Tuple[int, int]] = []
+
+    while stack:
+        node = stack[-1]
+        neighbours = adjacency.get(node)
+        if neighbours:
+            next_node = next(iter(neighbours))
+            remaining = neighbours[next_node]
+            if remaining <= 1:
+                neighbours.pop(next_node, None)
+            else:
+                neighbours[next_node] = remaining - 1
+
+            reverse_neighbours = adjacency.get(next_node)
+            if reverse_neighbours is not None:
+                reverse_remaining = reverse_neighbours.get(node, 0)
+                if reverse_remaining <= 1:
+                    reverse_neighbours.pop(node, None)
+                else:
+                    reverse_neighbours[node] = reverse_remaining - 1
+
+            stack.append(next_node)
+        else:
+            circuit.append(stack.pop())
+
+    circuit.reverse()
+    return circuit
 
 
 def _stitch_paths(paths: List[Path], tolerance: float) -> List[Path]:
