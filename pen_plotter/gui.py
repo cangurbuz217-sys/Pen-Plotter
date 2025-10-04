@@ -526,6 +526,7 @@ else:
                             line_spacing=line_spacing,
                             character_spacing=char_spacing,
                             curve_tolerance=curve_tolerance,
+                            stroke_mode="centerline",
                         )
                         raw_paths = layout_text(text, font_loader, layout_settings)
                         raw_bounds = measure_paths(raw_paths)
