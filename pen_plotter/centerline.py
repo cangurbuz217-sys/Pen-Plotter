@@ -518,27 +518,36 @@ def _component_fallback_loop(
     width = max_x - min_x
     height = max_y - min_y
     intrinsic_diameter = max(width, height)
-    min_visible_base = max(tolerance * 5.0, 1.0)
     glyph_height = context.max_y - context.min_y
-    is_small_glyph = glyph_height <= min_visible_base * 1.8
-    near_top = glyph_height > 0.0 and (context.max_y - center_y) < glyph_height * 0.3
-    relatively_small = glyph_height > 0.0 and height < glyph_height * 0.45
-    is_top_accent = not is_small_glyph and near_top and relatively_small
+    glyph_span = glyph_height if glyph_height > 0.0 else intrinsic_diameter
+    near_top = glyph_span > 0.0 and (context.max_y - center_y) < glyph_span * 0.3
+    relatively_small = glyph_span > 0.0 and height < glyph_span * 0.45
+    is_top_accent = near_top and relatively_small
+
+    min_visible_base = max(tolerance * 4.0, 0.45)
+    natural_diameter = intrinsic_diameter if intrinsic_diameter > 0.0 else min_visible_base
 
     if is_top_accent:
-        min_visible = max(min_visible_base * 0.55, 0.55)
-        max_visible = max(intrinsic_diameter * 1.1, min_visible * 1.05)
-        target_diameter = min(
-            max(intrinsic_diameter * 0.85, min_visible),
-            max_visible,
-            min_visible_base * 0.75,
+        accent_cap = glyph_span * 0.18 if glyph_span > 0.0 else natural_diameter
+        min_target = max(min_visible_base * 0.55, natural_diameter * 0.7)
+        max_target = max(
+            min(accent_cap, natural_diameter * 1.2 + tolerance * 2.0),
+            min_target,
+        )
+        target_diameter = max(
+            min_target,
+            min(max_target, natural_diameter * 1.05),
         )
     else:
-        min_visible = max(min_visible_base * 1.2, 1.2)
-        max_visible = max(intrinsic_diameter * 1.9, min_visible * 1.6)
-        target_diameter = min(
-            max(intrinsic_diameter * 1.35, min_visible),
-            max_visible,
+        punctuation_cap = glyph_span * 0.22 if glyph_span > 0.0 else natural_diameter
+        min_target = max(min_visible_base, natural_diameter * 0.8)
+        max_target = max(
+            min(punctuation_cap, natural_diameter * 1.25 + tolerance * 4.0),
+            min_target,
+        )
+        target_diameter = max(
+            min_target,
+            min(max_target, natural_diameter * 1.05 + tolerance * 2.0),
         )
 
     radius = max(target_diameter * 0.5, 0.45 / context.px_per_mm)
