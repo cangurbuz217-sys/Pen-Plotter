@@ -29,7 +29,8 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
     gcode.append(f"; {settings.comment}")
     gcode.append("G90 ; Absolute positioning")
     gcode.append("G21 ; Units in millimeters")
-    gcode.append(f"G0 Z{settings.approach_height:.3f}")
+    if settings.approach_height != settings.travel_height:
+        gcode.append(f"G0 Z{settings.approach_height:.3f}")
 
     current_feed: float | None = None
     current_z = settings.approach_height
@@ -99,19 +100,6 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
         )
         current_feed = settings.travel_feed_rate
         current_z = settings.travel_height
-
-    if settings.approach_height != current_z:
-        gcode.append(
-            _format_z_move(
-                "G0",
-                settings.approach_height,
-                settings.travel_feed_rate
-                if current_feed != settings.travel_feed_rate
-                else None,
-            )
-        )
-        current_feed = settings.travel_feed_rate
-        current_z = settings.approach_height
 
     gcode.append("M2 ; Program end")
     return gcode
