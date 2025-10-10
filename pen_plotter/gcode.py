@@ -29,11 +29,12 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
     gcode.append(f"; {settings.comment}")
     gcode.append("G90 ; Absolute positioning")
     gcode.append("G21 ; Units in millimeters")
-    if settings.approach_height != settings.travel_height:
+    approach_pending = settings.approach_height != settings.travel_height
+    if approach_pending:
         gcode.append(f"G0 Z{settings.approach_height:.3f}")
 
     current_feed: float | None = None
-    current_z = settings.approach_height
+    current_z = settings.approach_height if approach_pending else settings.travel_height
     pen_is_down = False
     pen_up_requested = False
 
@@ -41,7 +42,7 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
         if len(path) < 2:
             continue
 
-        if pen_up_requested or current_z != settings.travel_height:
+        if pen_up_requested or (current_z != settings.travel_height and not approach_pending):
             gcode.append(
                 _format_z_move(
                     "G0",
@@ -58,6 +59,8 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
 
         start = path[0]
         gcode.append(_format_move("G0", start, None))
+        if approach_pending:
+            approach_pending = False
         if current_z != settings.travel_height:
             gcode.append(_format_z_move("G0", settings.travel_height, None))
             current_z = settings.travel_height
