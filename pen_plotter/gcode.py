@@ -16,6 +16,7 @@ class PlotterSettings:
     we keep emitting mm/min commands required by most firmware.
     """
 
+    approach_height: float = 10.0
     travel_height: float = 5.0
     drawing_height: float = 0.0
     travel_feed_rate: float = 50.0  # mm/s
@@ -28,10 +29,10 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
     gcode.append(f"; {settings.comment}")
     gcode.append("G90 ; Absolute positioning")
     gcode.append("G21 ; Units in millimeters")
-    gcode.append(f"G0 Z{settings.travel_height:.3f}")
+    gcode.append(f"G0 Z{settings.approach_height:.3f}")
 
     current_feed: float | None = None
-    current_z = settings.travel_height
+    current_z = settings.approach_height
     pen_is_down = False
     pen_up_requested = False
 
@@ -91,9 +92,26 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
             _format_z_move(
                 "G0",
                 settings.travel_height,
-                settings.travel_feed_rate if current_feed != settings.travel_feed_rate else None,
+                settings.travel_feed_rate
+                if current_feed != settings.travel_feed_rate
+                else None,
             )
         )
+        current_feed = settings.travel_feed_rate
+        current_z = settings.travel_height
+
+    if settings.approach_height != current_z:
+        gcode.append(
+            _format_z_move(
+                "G0",
+                settings.approach_height,
+                settings.travel_feed_rate
+                if current_feed != settings.travel_feed_rate
+                else None,
+            )
+        )
+        current_feed = settings.travel_feed_rate
+        current_z = settings.approach_height
 
     gcode.append("M2 ; Program end")
     return gcode

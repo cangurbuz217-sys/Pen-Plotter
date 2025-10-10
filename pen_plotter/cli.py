@@ -58,6 +58,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Choose between centerline (single stroke) or outline paths.",
     )
     parser.add_argument(
+        "--approach-height",
+        type=float,
+        default=10.0,
+        help="Initial safe height (mm) before the first travel move.",
+    )
+    parser.add_argument(
         "--travel-height",
         type=float,
         default=5.0,
@@ -156,6 +162,7 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     settings = PlotterSettings(
+        approach_height=args.approach_height,
         travel_height=args.travel_height,
         drawing_height=args.drawing_height,
         travel_feed_rate=args.travel_feed,

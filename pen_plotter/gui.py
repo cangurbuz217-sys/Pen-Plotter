@@ -158,6 +158,7 @@ else:
         bed_y: float
         pen_offset_x: float
         pen_offset_y: float
+        approach_height: float
         pen_up: float
         pen_down: float
         travel_feed: float
@@ -198,6 +199,7 @@ else:
                 "bed_y": "235",
                 "pen_offset_x": "0",
                 "pen_offset_y": "0",
+                "approach_height": "10",
                 "pen_up": "5",
                 "pen_down": "0",
                 "travel_feed": "50",
@@ -211,6 +213,7 @@ else:
                 "bed_y": "Bed Y (mm)",
                 "pen_offset_x": "Pen offset X (mm)",
                 "pen_offset_y": "Pen offset Y (mm)",
+                "approach_height": "İlk yaklaşma (mm)",
                 "pen_up": "Kalem yukarı (mm)",
                 "pen_down": "Kalem aşağı (mm)",
                 "travel_feed": "Boşta hız (mm/sn)",
@@ -288,8 +291,9 @@ else:
             self._add_hardware_entry(hardware_frame, "bed_y", 0, 1)
             self._add_hardware_entry(hardware_frame, "pen_offset_x", 1, 0)
             self._add_hardware_entry(hardware_frame, "pen_offset_y", 1, 1)
-            self._add_hardware_entry(hardware_frame, "pen_up", 2, 0)
-            self._add_hardware_entry(hardware_frame, "pen_down", 2, 1)
+            self._add_hardware_entry(hardware_frame, "approach_height", 2, 0)
+            self._add_hardware_entry(hardware_frame, "pen_up", 2, 1)
+            self._add_hardware_entry(hardware_frame, "pen_down", 2, 2)
             self._add_hardware_entry(hardware_frame, "travel_feed", 3, 0)
             self._add_hardware_entry(hardware_frame, "drawing_feed", 3, 1)
 
@@ -563,6 +567,11 @@ else:
                 self.hardware_labels["pen_offset_y"],
                 default=self.hardware_defaults_float["pen_offset_y"],
             )
+            approach_height = self._parse_float(
+                self.hardware_vars["approach_height"],
+                self.hardware_labels["approach_height"],
+                default=self.hardware_defaults_float["approach_height"],
+            )
             curve_tolerance = self._parse_float(
                 self.curve_tolerance_var,
                 "Eğri toleransı (mm)",
@@ -615,6 +624,7 @@ else:
                 bed_y=bed_y,
                 pen_offset_x=pen_offset_x,
                 pen_offset_y=pen_offset_y,
+                approach_height=approach_height,
                 pen_up=pen_up,
                 pen_down=pen_down,
                 travel_feed=travel_feed,
@@ -678,6 +688,7 @@ else:
                 combined_metrics = measure_paths(all_paths)
                 comment = f"Pen Plotter Studio - {Path(inputs.font_path).name}"[:80]
                 settings = PlotterSettings(
+                    approach_height=inputs.approach_height,
                     travel_height=inputs.pen_up,
                     drawing_height=inputs.pen_down,
                     travel_feed_rate=inputs.travel_feed,
