@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,7 @@ else:
 
             self.translation_x = 0.0
             self.translation_y = 0.0
+            self.rotation_deg = 0.0
             self.local_bounds: Optional[Tuple[float, float, float, float]] = None
             self.current_bounds: Optional[Tuple[float, float, float, float]] = None
             self.color = "#1f77b4"
@@ -127,7 +129,116 @@ else:
 
         def update_position_label(self) -> None:
             self.position_var.set(
-                f"Pozisyon: X={self.translation_x:.1f} mm | Y={self.translation_y:.1f} mm"
+                (
+                    "Pozisyon: X={:.1f} mm | Y={:.1f} mm | A={:.1f}°".format(
+                        self.translation_x,
+                        self.translation_y,
+                        self.rotation_deg,
+                    )
+                )
+            )
+
+        def destroy(self) -> None:
+            self.frame.destroy()
+
+    class _GUIShape:
+        """Configurable geometric shape that can be positioned and rotated."""
+
+        SHAPE_TITLES = {
+            "rectangle": "Dikdörtgen",
+            "line": "Çizgi",
+            "arrow": "Yön oku",
+        }
+
+        PARAM_CONFIGS = {
+            "rectangle": [
+                ("Genişlik (mm)", "width", "40"),
+                ("Yükseklik (mm)", "height", "20"),
+            ],
+            "line": [
+                ("Uzunluk (mm)", "length", "40"),
+            ],
+            "arrow": [
+                ("Uzunluk (mm)", "length", "50"),
+                ("Ok başı (mm)", "head", "12"),
+            ],
+        }
+
+        def __init__(self, app: "PenPlotterStudio", uid: int, shape_type: str) -> None:
+            if shape_type not in self.PARAM_CONFIGS:
+                raise ValueError(f"Desteklenmeyen şekil: {shape_type}")
+            self.app = app
+            self.uid = uid
+            self.shape_type = shape_type
+            self.frame = ttk.Frame(app.shapes_container, padding=(8, 8))
+            self.header_var = tk.StringVar(value="")
+            self.position_var = tk.StringVar(
+                value="Pozisyon: X=0.0 mm | Y=0.0 mm | A=0.0°"
+            )
+
+            header = ttk.Frame(self.frame)
+            header.pack(fill="x", pady=(0, 6))
+            ttk.Label(
+                header,
+                textvariable=self.header_var,
+                font=("TkDefaultFont", 10, "bold"),
+            ).pack(side="left")
+            ttk.Label(header, textvariable=self.position_var).pack(side="left", padx=(8, 0))
+            ttk.Button(
+                header,
+                text="✕",
+                width=3,
+                command=lambda: app.remove_shape(self),
+            ).pack(side="right")
+
+            controls = ttk.Frame(self.frame)
+            controls.pack(fill="x")
+            controls.columnconfigure(0, weight=1)
+            controls.columnconfigure(1, weight=1)
+
+            self.param_vars: Dict[str, tk.StringVar] = {}
+            self.param_labels: Dict[str, str] = {}
+            self.param_defaults: Dict[str, float] = {}
+            for column, (label_text, key, default) in enumerate(
+                self.PARAM_CONFIGS[shape_type]
+            ):
+                ttk.Label(controls, text=label_text).grid(
+                    column=column,
+                    row=0,
+                    sticky="w",
+                    padx=(0, 8),
+                )
+                var = tk.StringVar(value=default)
+                entry = ttk.Entry(controls, textvariable=var, width=8)
+                entry.grid(column=column, row=1, sticky="ew", padx=(0, 8))
+                entry.bind("<KeyRelease>", lambda _event: app.schedule_preview())
+                self.param_vars[key] = var
+                self.param_labels[key] = label_text
+                try:
+                    self.param_defaults[key] = float(default)
+                except ValueError:
+                    self.param_defaults[key] = 0.0
+
+            self.translation_x = 0.0
+            self.translation_y = 0.0
+            self.rotation_deg = 0.0
+            self.local_bounds: Optional[Tuple[float, float, float, float]] = None
+            self.color = "#1f77b4"
+
+        def set_display_index(self, index: int, color: str) -> None:
+            title = self.SHAPE_TITLES.get(self.shape_type, self.shape_type.title())
+            self.header_var.set(f"{title} {index}")
+            self.color = color
+
+        def update_position_label(self) -> None:
+            self.position_var.set(
+                (
+                    "Pozisyon: X={:.1f} mm | Y={:.1f} mm | A={:.1f}°".format(
+                        self.translation_x,
+                        self.translation_y,
+                        self.rotation_deg,
+                    )
+                )
             )
 
         def destroy(self) -> None:
@@ -141,6 +252,15 @@ else:
         line_spacing: float
         char_spacing: float
         translation: Tuple[float, float]
+        rotation: float
+
+    @dataclass
+    class _ShapeRequest:
+        uid: int
+        shape_type: str
+        params: Dict[str, float]
+        translation: Tuple[float, float]
+        rotation: float
 
     @dataclass
     class _BlockPreviewData:
@@ -150,6 +270,22 @@ else:
         local_bounds: Optional[Tuple[float, float, float, float]]
         outside: bool
         length: float
+        rotation: float
+        center: Tuple[float, float]
+        handle_point: Tuple[float, float]
+
+    @dataclass
+    class _ShapePreviewData:
+        uid: int
+        shape_type: str
+        paths: List[PathType]
+        bounds: Tuple[float, float, float, float]
+        local_bounds: Tuple[float, float, float, float]
+        outside: bool
+        length: float
+        rotation: float
+        center: Tuple[float, float]
+        handle_point: Tuple[float, float]
 
     @dataclass
     class _PreviewInputs:
@@ -165,11 +301,13 @@ else:
         drawing_feed: float
         curve_tolerance: float
         blocks: List[_BlockRequest]
+        shapes: List["_ShapeRequest"]
 
     @dataclass
     class _PreviewComputation:
         inputs: _PreviewInputs
         block_results: List[_BlockPreviewData]
+        shape_results: List[_ShapePreviewData]
         all_paths: List[PathType]
         metrics: Tuple[float, float, float, float, float]
         total_length: float
@@ -231,8 +369,13 @@ else:
             self.warning_var = tk.StringVar(value="")
 
             self.blocks: List[_GUITextBlock] = []
+            self.shapes: List[_GUIShape] = []
             self.block_uid_counter = 1
-            self.block_bounds_mm: Dict[int, Tuple[float, float, float, float]] = {}
+            self.shape_uid_counter = 1
+            self.item_bounds_mm: Dict[object, Tuple[float, float, float, float]] = {}
+            self.item_centers_mm: Dict[object, Tuple[float, float]] = {}
+            self.item_handles_mm: Dict[object, Tuple[float, float]] = {}
+            self.render_stack: List[object] = []
             self.preview_paths: List[PathType] = []
             self.preview_settings: Optional[PlotterSettings] = None
             self.preview_metrics: Optional[Tuple[float, float, float, float, float]] = None
@@ -242,8 +385,11 @@ else:
                 self.hardware_defaults_float["bed_y"],
             )
             self.canvas_transform = (1.0, 24.0, 24.0)
-            self.drag_block: Optional[_GUITextBlock] = None
+            self.drag_item: Optional[object] = None
             self.drag_offset = (0.0, 0.0)
+            self.rotate_item: Optional[object] = None
+            self.rotate_reference_angle = 0.0
+            self.rotate_center = (0.0, 0.0)
             self._preview_pending = False
             self._preview_timer: Optional[str] = None
             self._preview_thread_running = False
@@ -319,6 +465,7 @@ else:
             font_frame.grid(column=0, row=2, sticky="nsew")
             font_frame.columnconfigure(0, weight=1)
             font_frame.rowconfigure(2, weight=1)
+            font_frame.rowconfigure(3, weight=1)
 
             ttk.Button(font_frame, text="TTF font seç", command=self.choose_font).grid(
                 column=0,
@@ -347,6 +494,35 @@ else:
             self.blocks_container = ttk.Frame(blocks_panel)
             self.blocks_container.grid(column=0, row=1, sticky="nsew")
             self.blocks_container.columnconfigure(0, weight=1)
+
+            shapes_frame = ttk.LabelFrame(font_frame, text="Şekiller")
+            shapes_frame.grid(column=0, row=3, sticky="nsew", pady=(12, 0))
+            shapes_frame.columnconfigure(0, weight=1)
+            shapes_frame.rowconfigure(1, weight=1)
+
+            shapes_buttons = ttk.Frame(shapes_frame)
+            shapes_buttons.grid(column=0, row=0, sticky="ew", pady=(4, 6))
+            for idx in range(3):
+                shapes_buttons.columnconfigure(idx, weight=1)
+            ttk.Button(
+                shapes_buttons,
+                text="Dikdörtgen ekle",
+                command=lambda: self.add_shape("rectangle"),
+            ).grid(column=0, row=0, sticky="ew", padx=(0, 4))
+            ttk.Button(
+                shapes_buttons,
+                text="Çizgi ekle",
+                command=lambda: self.add_shape("line"),
+            ).grid(column=1, row=0, sticky="ew", padx=2)
+            ttk.Button(
+                shapes_buttons,
+                text="Yön oku ekle",
+                command=lambda: self.add_shape("arrow"),
+            ).grid(column=2, row=0, sticky="ew", padx=(4, 0))
+
+            self.shapes_container = ttk.Frame(shapes_frame)
+            self.shapes_container.grid(column=0, row=1, sticky="nsew")
+            self.shapes_container.columnconfigure(0, weight=1)
 
             preview_frame = ttk.Frame(main)
             preview_frame.grid(column=1, row=0, sticky="nsew")
@@ -453,6 +629,29 @@ else:
             for index, block in enumerate(self.blocks, start=1):
                 color = self.BLOCK_COLORS[(index - 1) % len(self.BLOCK_COLORS)]
                 block.set_display_index(index, color)
+
+        def add_shape(self, shape_type: str) -> None:
+            shape = _GUIShape(self, self.shape_uid_counter, shape_type)
+            self.shape_uid_counter += 1
+            shape.frame.grid(column=0, row=len(self.shapes), sticky="ew", pady=(0, 12))
+            self.shapes.append(shape)
+            self.update_shape_headers()
+            self.schedule_preview()
+
+        def remove_shape(self, shape: _GUIShape) -> None:
+            if shape not in self.shapes:
+                return
+            self.shapes.remove(shape)
+            shape.destroy()
+            for index, other in enumerate(self.shapes):
+                other.frame.grid_configure(row=index)
+            self.update_shape_headers()
+            self.schedule_preview()
+
+        def update_shape_headers(self) -> None:
+            for index, shape in enumerate(self.shapes, start=1):
+                color = self.BLOCK_COLORS[(index - 1) % len(self.BLOCK_COLORS)]
+                shape.set_display_index(index, color)
 
         # ---------------------------------------------------------- Utilities --
         def choose_font(self) -> None:
@@ -612,11 +811,33 @@ else:
                         line_spacing=line_spacing,
                         char_spacing=char_spacing,
                         translation=(block.translation_x, block.translation_y),
+                        rotation=block.rotation_deg,
                     )
                 )
 
-            if not block_requests:
-                raise ValueError("En az bir metin bloğu dolu olmalıdır.")
+            shape_requests: List[_ShapeRequest] = []
+            for shape in self.shapes:
+                params: Dict[str, float] = {}
+                for key, var in shape.param_vars.items():
+                    default = shape.param_defaults.get(key, 0.0)
+                    params[key] = self._parse_float(
+                        var,
+                        shape.param_labels.get(key, key),
+                        default=default,
+                        min_value=0.0,
+                    )
+                shape_requests.append(
+                    _ShapeRequest(
+                        uid=shape.uid,
+                        shape_type=shape.shape_type,
+                        params=params,
+                        translation=(shape.translation_x, shape.translation_y),
+                        rotation=shape.rotation_deg,
+                    )
+                )
+
+            if not block_requests and not shape_requests:
+                raise ValueError("En az bir metin bloğu veya şekil olmalıdır.")
 
             return _PreviewInputs(
                 font_path=font_path_str,
@@ -631,6 +852,7 @@ else:
                 drawing_feed=drawing_feed,
                 curve_tolerance=curve_tolerance,
                 blocks=block_requests,
+                shapes=shape_requests,
             )
 
         def _preview_worker(
@@ -638,8 +860,49 @@ else:
         ) -> None:
             try:
                 block_results: List[_BlockPreviewData] = []
+                shape_results: List[_ShapePreviewData] = []
                 all_paths: List[PathType] = []
                 total_length = 0.0
+
+                def _rotate_paths(
+                    paths: List[PathType], angle_deg: float, pivot: Tuple[float, float]
+                ) -> List[PathType]:
+                    if not paths or abs(angle_deg) < 1e-6:
+                        return [list(path) for path in paths]
+                    px, py = pivot
+                    angle_rad = math.radians(angle_deg)
+                    cos_a = math.cos(angle_rad)
+                    sin_a = math.sin(angle_rad)
+                    rotated: List[PathType] = []
+                    for path in paths:
+                        new_path: PathType = []
+                        for x, y in path:
+                            dx = x - px
+                            dy = y - py
+                            rx = px + dx * cos_a - dy * sin_a
+                            ry = py + dx * sin_a + dy * cos_a
+                            new_path.append((rx, ry))
+                        rotated.append(new_path)
+                    return rotated
+
+                def _handle_point(
+                    center: Tuple[float, float],
+                    local_bounds: Optional[Tuple[float, float, float, float]],
+                    rotation_deg: float,
+                ) -> Tuple[float, float]:
+                    cx, cy = center
+                    if local_bounds is None:
+                        reach = 12.0
+                    else:
+                        width = local_bounds[2] - local_bounds[0]
+                        height = local_bounds[3] - local_bounds[1]
+                        reach = max(width, height) * 0.5 + 8.0
+                        reach = max(reach, 12.0)
+                    angle_rad = math.radians(rotation_deg)
+                    dx = -math.sin(angle_rad)
+                    dy = math.cos(angle_rad)
+                    return (cx + dx * reach, cy + dy * reach)
+
                 with FontLoader(inputs.font_path) as font_loader:
                     for request in inputs.blocks:
                         layout_settings = LayoutSettings(
@@ -650,15 +913,18 @@ else:
                             stroke_mode="centerline",
                         )
                         raw_paths = layout_text(request.text, font_loader, layout_settings)
-                        local_bounds = (
-                            measure_paths(raw_paths)[:4] if raw_paths else None
-                        )
-                        translated_paths = translate_paths(
-                            raw_paths,
+                        if not raw_paths:
+                            continue
+                        local_bounds = measure_paths(raw_paths)[:4]
+                        cx = (local_bounds[0] + local_bounds[2]) * 0.5
+                        cy = (local_bounds[1] + local_bounds[3]) * 0.5
+                        rotated_paths = _rotate_paths(raw_paths, request.rotation, (cx, cy))
+                        transformed_paths = translate_paths(
+                            rotated_paths,
                             request.translation[0],
                             request.translation[1],
                         )
-                        translated_metrics = measure_paths(translated_paths)
+                        translated_metrics = measure_paths(transformed_paths)
                         length = translated_metrics[4]
                         if length == 0.0:
                             continue
@@ -669,21 +935,73 @@ else:
                             or bounds_rect[2] > inputs.bed_x + 1e-3
                             or bounds_rect[3] > inputs.bed_y + 1e-3
                         )
+                        center_world = (cx + request.translation[0], cy + request.translation[1])
+                        handle_point = _handle_point(center_world, local_bounds, request.rotation)
                         block_results.append(
                             _BlockPreviewData(
                                 uid=request.uid,
-                                paths=translated_paths,
+                                paths=transformed_paths,
                                 bounds=bounds_rect,
                                 local_bounds=local_bounds,
                                 outside=outside,
                                 length=length,
+                                rotation=request.rotation,
+                                center=center_world,
+                                handle_point=handle_point,
                             )
                         )
-                        all_paths.extend(translated_paths)
+                        all_paths.extend(transformed_paths)
                         total_length += length
 
+                for shape_request in inputs.shapes:
+                    base_paths, local_bounds = self._shape_paths(shape_request)
+                    if not base_paths:
+                        continue
+                    cx = (local_bounds[0] + local_bounds[2]) * 0.5
+                    cy = (local_bounds[1] + local_bounds[3]) * 0.5
+                    rotated_paths = _rotate_paths(base_paths, shape_request.rotation, (cx, cy))
+                    transformed_paths = translate_paths(
+                        rotated_paths,
+                        shape_request.translation[0],
+                        shape_request.translation[1],
+                    )
+                    metrics = measure_paths(transformed_paths)
+                    length = metrics[4]
+                    if length == 0.0:
+                        continue
+                    bounds_rect = metrics[:4]
+                    outside = (
+                        bounds_rect[0] < -1e-3
+                        or bounds_rect[1] < -1e-3
+                        or bounds_rect[2] > inputs.bed_x + 1e-3
+                        or bounds_rect[3] > inputs.bed_y + 1e-3
+                    )
+                    center_world = (
+                        cx + shape_request.translation[0],
+                        cy + shape_request.translation[1],
+                    )
+                    handle_point = _handle_point(
+                        center_world, local_bounds, shape_request.rotation
+                    )
+                    shape_results.append(
+                        _ShapePreviewData(
+                            uid=shape_request.uid,
+                            shape_type=shape_request.shape_type,
+                            paths=transformed_paths,
+                            bounds=bounds_rect,
+                            local_bounds=local_bounds,
+                            outside=outside,
+                            length=length,
+                            rotation=shape_request.rotation,
+                            center=center_world,
+                            handle_point=handle_point,
+                        )
+                    )
+                    all_paths.extend(transformed_paths)
+                    total_length += length
+
                 if not all_paths:
-                    raise ValueError("En az bir metin bloğu dolu olmalıdır.")
+                    raise ValueError("En az bir öğe önizleme için kullanılabilir olmalıdır.")
 
                 combined_metrics = measure_paths(all_paths)
                 comment = f"Pen Plotter Studio - {Path(inputs.font_path).name}"[:80]
@@ -698,6 +1016,7 @@ else:
                 preview = _PreviewComputation(
                     inputs=inputs,
                     block_results=block_results,
+                    shape_results=shape_results,
                     all_paths=all_paths,
                     metrics=combined_metrics,
                     total_length=total_length,
@@ -728,36 +1047,71 @@ else:
             self.preview_pen_offset = (inputs.pen_offset_x, inputs.pen_offset_y)
             self.current_bed_size = (inputs.bed_x, inputs.bed_y)
 
-            self.block_bounds_mm.clear()
-            block_map = {block.uid: block for block in self.blocks}
-            outside_blocks: List[_GUITextBlock] = []
-            render_blocks: List[
-                Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
+            self.item_bounds_mm.clear()
+            self.item_centers_mm.clear()
+            self.item_handles_mm.clear()
+            render_items: List[
+                Tuple[object, List[PathType], Tuple[float, float, float, float], bool]
             ] = []
-            seen: set[int] = set()
+            outside_labels: List[str] = []
 
+            block_map = {block.uid: block for block in self.blocks}
+            seen_blocks: set[int] = set()
             for block_data in data.block_results:
                 block = block_map.get(block_data.uid)
                 if block is None:
                     continue
-                seen.add(block.uid)
+                seen_blocks.add(block.uid)
                 block.local_bounds = block_data.local_bounds
                 block.current_bounds = block_data.bounds
+                block.rotation_deg = block_data.rotation
                 block.update_position_label()
-                self.block_bounds_mm[block.uid] = block_data.bounds
-                render_blocks.append(
+                self.item_bounds_mm[block] = block_data.bounds
+                self.item_centers_mm[block] = block_data.center
+                self.item_handles_mm[block] = block_data.handle_point
+                render_items.append(
                     (block, block_data.paths, block_data.bounds, block_data.outside)
                 )
                 if block_data.outside:
-                    outside_blocks.append(block)
+                    outside_labels.append(block.header_var.get())
 
             for block in self.blocks:
-                if block.uid not in seen:
+                if block.uid not in seen_blocks:
                     block.local_bounds = None
                     block.current_bounds = None
-                    self.block_bounds_mm.pop(block.uid, None)
+                    self.item_bounds_mm.pop(block, None)
+                    self.item_centers_mm.pop(block, None)
+                    self.item_handles_mm.pop(block, None)
 
-            self._draw_preview(inputs.bed_x, inputs.bed_y, render_blocks)
+            shape_map = {shape.uid: shape for shape in self.shapes}
+            seen_shapes: set[int] = set()
+            for shape_data in data.shape_results:
+                shape = shape_map.get(shape_data.uid)
+                if shape is None:
+                    continue
+                seen_shapes.add(shape.uid)
+                shape.local_bounds = shape_data.local_bounds
+                shape.rotation_deg = shape_data.rotation
+                shape.update_position_label()
+                self.item_bounds_mm[shape] = shape_data.bounds
+                self.item_centers_mm[shape] = shape_data.center
+                self.item_handles_mm[shape] = shape_data.handle_point
+                render_items.append(
+                    (shape, shape_data.paths, shape_data.bounds, shape_data.outside)
+                )
+                if shape_data.outside:
+                    outside_labels.append(shape.header_var.get())
+
+            for shape in self.shapes:
+                if shape.uid not in seen_shapes:
+                    shape.local_bounds = None
+                    self.item_bounds_mm.pop(shape, None)
+                    self.item_centers_mm.pop(shape, None)
+                    self.item_handles_mm.pop(shape, None)
+
+            self.render_stack = [item for item, _, _, _ in render_items]
+
+            self._draw_preview(inputs.bed_x, inputs.bed_y, render_items)
             width = data.metrics[2] - data.metrics[0]
             height = data.metrics[3] - data.metrics[1]
             self.metrics_var.set(
@@ -767,13 +1121,13 @@ else:
                     data.total_length,
                 )
             )
-            if outside_blocks:
-                block_names = ", ".join(block.header_var.get() for block in outside_blocks)
-                if len(outside_blocks) == 1:
-                    warning_text = f"Uyarı: {block_names} çalışma alanının dışında."
+            if outside_labels:
+                names = ", ".join(outside_labels)
+                if len(outside_labels) == 1:
+                    warning_text = f"Uyarı: {names} çalışma alanının dışında."
                 else:
                     warning_text = (
-                        f"Uyarı: Metin blokları çalışma alanının dışında: {block_names}"
+                        f"Uyarı: Öğeler çalışma alanının dışında: {names}"
                     )
                 self.warning_var.set(warning_text)
                 self.status_var.set(warning_text)
@@ -798,7 +1152,10 @@ else:
             self.preview_paths = []
             self.preview_settings = None
             self.preview_metrics = None
-            self.block_bounds_mm.clear()
+            self.item_bounds_mm.clear()
+            self.item_centers_mm.clear()
+            self.item_handles_mm.clear()
+            self.render_stack.clear()
             self.canvas.delete("all")
             self.canvas.create_text(
                 self.canvas_width / 2,
@@ -834,8 +1191,8 @@ else:
             self,
             bed_x: float,
             bed_y: float,
-            block_results: List[
-                Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
+            items: List[
+                Tuple[object, List[PathType], Tuple[float, float, float, float], bool]
             ],
         ) -> None:
             canvas = self.canvas
@@ -938,9 +1295,8 @@ else:
                 y_line = height - (offset_y + pen_offset_y * scale)
                 canvas.create_line(x0, y_line, x1, y_line, fill="#f4a259", dash=(4, 4))
 
-            self.block_bounds_mm.clear()
-            for block, paths, bounds, outside in block_results:
-                path_color = "#000000"
+            for item, paths, bounds, outside in items:
+                color = getattr(item, "color", "#000000")
                 for path in paths:
                     if len(path) < 2:
                         continue
@@ -949,14 +1305,14 @@ else:
                         x = offset_x + x_mm * scale
                         y = height - (offset_y + y_mm * scale)
                         coords.extend((x, y))
-                    canvas.create_line(coords, fill=path_color, width=2)
+                    canvas.create_line(coords, fill="#000000", width=2)
 
                 min_x, min_y, max_x, max_y = bounds
                 x_left = offset_x + min_x * scale
                 x_right = offset_x + max_x * scale
                 y_top = height - (offset_y + max_y * scale)
                 y_bottom = height - (offset_y + min_y * scale)
-                outline_color = "#d9534f" if outside else block.color
+                outline_color = "#d9534f" if outside else color
                 dash_pattern = (6, 3) if outside else (4, 3)
                 canvas.create_rectangle(
                     x_left,
@@ -967,15 +1323,35 @@ else:
                     dash=dash_pattern,
                     width=2 if outside else 1,
                 )
-                canvas.create_text(
-                    x_left + 6,
-                    y_top + 14,
-                    text=block.header_var.get(),
-                    fill=outline_color,
-                    anchor="w",
-                    font=("TkDefaultFont", 9, "bold"),
-                )
-                self.block_bounds_mm[block.uid] = bounds
+                header_var = getattr(item, "header_var", None)
+                label_text = header_var.get() if header_var is not None else ""
+                if label_text:
+                    canvas.create_text(
+                        x_left + 6,
+                        y_top + 14,
+                        text=label_text,
+                        fill=outline_color,
+                        anchor="w",
+                        font=("TkDefaultFont", 9, "bold"),
+                    )
+
+                center_mm = self.item_centers_mm.get(item)
+                handle_mm = self.item_handles_mm.get(item)
+                if center_mm and handle_mm:
+                    cx = offset_x + center_mm[0] * scale
+                    cy = height - (offset_y + center_mm[1] * scale)
+                    hx = offset_x + handle_mm[0] * scale
+                    hy = height - (offset_y + handle_mm[1] * scale)
+                    canvas.create_line(cx, cy, hx, hy, fill=outline_color, dash=(3, 2))
+                    canvas.create_oval(
+                        hx - 6,
+                        hy - 6,
+                        hx + 6,
+                        hy + 6,
+                        outline=outline_color,
+                        fill="#ffffff",
+                        width=2,
+                    )
 
         def save_project(self) -> None:
             if filedialog is None:
@@ -1047,6 +1423,9 @@ else:
             for block in list(self.blocks):
                 self.remove_block(block)
 
+            for shape in list(self.shapes):
+                self.remove_shape(shape)
+
             for key, var in self.hardware_vars.items():
                 value = payload.get("hardware", {}).get(key)
                 if isinstance(value, (int, float)):
@@ -1103,12 +1482,64 @@ else:
                             block.translation_y = float(translation[1])
                         except (TypeError, ValueError):
                             pass
+                    rotation = entry.get("rotation")
+                    if isinstance(rotation, (int, float)):
+                        block.rotation_deg = float(rotation)
+                    elif isinstance(rotation, str):
+                        try:
+                            block.rotation_deg = float(rotation)
+                        except ValueError:
+                            pass
                     block.update_position_label()
             else:
                 self.add_block()
 
+            shapes_payload = payload.get("shapes")
+            if isinstance(shapes_payload, list) and shapes_payload:
+                for entry in shapes_payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    shape_type = entry.get("type")
+                    if not isinstance(shape_type, str):
+                        continue
+                    try:
+                        self.add_shape(shape_type)
+                    except ValueError:
+                        continue
+                    shape = self.shapes[-1]
+                    params = entry.get("params", {})
+                    if isinstance(params, dict):
+                        for key, value in params.items():
+                            var = shape.param_vars.get(key)
+                            if var is None:
+                                continue
+                            if isinstance(value, (int, float)):
+                                var.set(self._fmt(float(value)))
+                            elif isinstance(value, str):
+                                var.set(value)
+                    translation = entry.get("translation")
+                    if (
+                        isinstance(translation, (list, tuple))
+                        and len(translation) == 2
+                    ):
+                        try:
+                            shape.translation_x = float(translation[0])
+                            shape.translation_y = float(translation[1])
+                        except (TypeError, ValueError):
+                            pass
+                    rotation = entry.get("rotation")
+                    if isinstance(rotation, (int, float)):
+                        shape.rotation_deg = float(rotation)
+                    elif isinstance(rotation, str):
+                        try:
+                            shape.rotation_deg = float(rotation)
+                        except ValueError:
+                            pass
+                    shape.update_position_label()
+
             self._preview_pending = previous_pending
             self.update_block_headers()
+            self.update_shape_headers()
             self.schedule_preview()
             self.status_var.set(f"Proje yüklendi: {file_path}")
 
@@ -1155,35 +1586,136 @@ else:
             return mm_x, mm_y
 
         def _on_canvas_press(self, event: tk.Event) -> None:
-            if not self.block_bounds_mm:
+            if not self.item_bounds_mm:
                 return
             mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
-            for block in reversed(self.blocks):
-                bounds = self.block_bounds_mm.get(block.uid)
-                if bounds and bounds[0] <= mm_x <= bounds[2] and bounds[1] <= mm_y <= bounds[3]:
-                    self.drag_block = block
-                    self.drag_offset = (mm_x - block.translation_x, mm_y - block.translation_y)
-                    self.status_var.set(f"{block.header_var.get()} sürükleniyor...")
-                    break
+
+            for item in reversed(self.render_stack):
+                handle = self.item_handles_mm.get(item)
+                center = self.item_centers_mm.get(item)
+                if handle and center:
+                    distance = math.hypot(mm_x - handle[0], mm_y - handle[1])
+                    if distance <= 8.0:
+                        self.rotate_item = item
+                        vector = (handle[0] - center[0], handle[1] - center[1])
+                        base_angle = math.degrees(math.atan2(vector[1], vector[0]))
+                        current_rotation = getattr(item, "rotation_deg", 0.0)
+                        self.rotate_reference_angle = base_angle - current_rotation
+                        self.rotate_center = center
+                        header_var = getattr(item, "header_var", None)
+                        label_text = header_var.get() if header_var is not None else "Öğe"
+                        self.status_var.set(f"{label_text} döndürülüyor...")
+                        return
+
+            for item in reversed(self.render_stack):
+                bounds = self.item_bounds_mm.get(item)
+                if (
+                    bounds
+                    and bounds[0] - 1e-3 <= mm_x <= bounds[2] + 1e-3
+                    and bounds[1] - 1e-3 <= mm_y <= bounds[3] + 1e-3
+                ):
+                    self.drag_item = item
+                    tx = getattr(item, "translation_x", 0.0)
+                    ty = getattr(item, "translation_y", 0.0)
+                    self.drag_offset = (mm_x - tx, mm_y - ty)
+                    header_var = getattr(item, "header_var", None)
+                    label_text = header_var.get() if header_var is not None else "Öğe"
+                    self.status_var.set(f"{label_text} sürükleniyor...")
+                    return
 
         def _on_canvas_drag(self, event: tk.Event) -> None:
-            block = self.drag_block
-            if block is None:
+            mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
+            if self.rotate_item is not None:
+                center_x, center_y = self.rotate_center
+                vx = mm_x - center_x
+                vy = mm_y - center_y
+                if math.hypot(vx, vy) < 1e-3:
+                    return
+                angle = math.degrees(math.atan2(vy, vx))
+                new_rotation = angle - self.rotate_reference_angle
+                setattr(self.rotate_item, "rotation_deg", new_rotation)
+                update_method = getattr(self.rotate_item, "update_position_label", None)
+                if callable(update_method):
+                    update_method()
+                self.schedule_preview()
+                return
+
+            item = self.drag_item
+            if item is None:
                 return
             mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
             new_tx = mm_x - self.drag_offset[0]
             new_ty = mm_y - self.drag_offset[1]
-            block.translation_x = new_tx
-            block.translation_y = new_ty
-            block.update_position_label()
+            setattr(item, "translation_x", new_tx)
+            setattr(item, "translation_y", new_ty)
+            update_method = getattr(item, "update_position_label", None)
+            if callable(update_method):
+                update_method()
             self.schedule_preview()
 
         def _on_canvas_release(self, _event: tk.Event) -> None:
-            if self.drag_block is not None:
-                self.status_var.set("Konum güncellendi.")
-            self.drag_block = None
+            if self.rotate_item is not None:
+                header_var = getattr(self.rotate_item, "header_var", None)
+                label_text = header_var.get() if header_var is not None else "Öğe"
+                self.status_var.set(f"{label_text} rotasyonu güncellendi.")
+            elif self.drag_item is not None:
+                header_var = getattr(self.drag_item, "header_var", None)
+                label_text = header_var.get() if header_var is not None else "Öğe"
+                self.status_var.set(f"{label_text} konumu güncellendi.")
+            self.drag_item = None
+            self.rotate_item = None
 
         # ------------------------------------------------------------ Helpers --
+        def _shape_paths(
+            self, request: _ShapeRequest
+        ) -> Tuple[List[PathType], Tuple[float, float, float, float]]:
+            params = request.params
+            shape_type = request.shape_type
+            if shape_type == "rectangle":
+                width = max(params.get("width", 0.0), 0.0)
+                height = max(params.get("height", 0.0), 0.0)
+                half_w = width * 0.5
+                half_h = height * 0.5
+                path = [
+                    (-half_w, -half_h),
+                    (half_w, -half_h),
+                    (half_w, half_h),
+                    (-half_w, half_h),
+                    (-half_w, -half_h),
+                ]
+                local_bounds = (-half_w, -half_h, half_w, half_h)
+                return [path], local_bounds
+            if shape_type == "line":
+                length = max(params.get("length", 0.0), 0.0)
+                half = length * 0.5
+                path = [(-half, 0.0), (half, 0.0)]
+                local_bounds = (-half, -0.1, half, 0.1)
+                return [path], local_bounds
+            if shape_type == "arrow":
+                length = max(params.get("length", 0.0), 0.0)
+                head = max(params.get("head", length * 0.25), 0.0)
+                half = length * 0.5
+                head = min(head, max(length * 0.49, 0.0))
+                shaft_end = half - head
+                shaft_end = max(shaft_end, -half)
+                head_width = max(head * 0.6, head * 0.2, 0.1)
+                path = [
+                    (-half, 0.0),
+                    (shaft_end, 0.0),
+                    (shaft_end, head_width),
+                    (half, 0.0),
+                    (shaft_end, -head_width),
+                    (shaft_end, 0.0),
+                ]
+                local_bounds = (
+                    -half,
+                    -max(head_width, 0.1),
+                    half,
+                    max(head_width, 0.1),
+                )
+                return [path], local_bounds
+            return [], (0.0, 0.0, 0.0, 0.0)
+
         def _parse_float(
             self,
             var: tk.StringVar,
@@ -1208,8 +1740,8 @@ else:
             return f"{value:.3f}".rstrip("0").rstrip(".")
 
         def _collect_project_state(self) -> dict:
-            if not self.blocks:
-                raise ValueError("En az bir metin bloğu olmalı.")
+            if not self.blocks and not self.shapes:
+                raise ValueError("En az bir metin bloğu veya şekil olmalı.")
             font_path = self.font_path_var.get().strip()
             if not font_path:
                 raise ValueError("Projeyi kaydetmeden önce bir font seçin.")
@@ -1223,8 +1755,18 @@ else:
                         "line_spacing": block.line_spacing_var.get(),
                         "character_spacing": block.char_spacing_var.get(),
                         "translation": [block.translation_x, block.translation_y],
+                        "rotation": block.rotation_deg,
                     }
                 )
+            shapes_payload = []
+            for shape in self.shapes:
+                shape_entry = {
+                    "type": shape.shape_type,
+                    "params": {key: var.get() for key, var in shape.param_vars.items()},
+                    "translation": [shape.translation_x, shape.translation_y],
+                    "rotation": shape.rotation_deg,
+                }
+                shapes_payload.append(shape_entry)
             return {
                 "font_path": font_path,
                 "curve_tolerance": self.curve_tolerance_var.get(),
@@ -1232,6 +1774,7 @@ else:
                     key: var.get() for key, var in self.hardware_vars.items()
                 },
                 "blocks": blocks_payload,
+                "shapes": shapes_payload,
             }
 
     PlotterGUI = PenPlotterStudio

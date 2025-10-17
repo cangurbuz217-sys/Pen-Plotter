@@ -6,6 +6,7 @@ Bu depo, TrueType fontları kullanarak istediğiniz metni 3B yazıcı veya pen p
 
 - Yeni **Pen Plotter Studio** masaüstü arayüzü; yatak boyutunu, pen ofsetlerini, ilk yaklaşma ve pen yukarı/aşağı yüksekliklerini belirleyip canlı önizleme ile sınırlar içinde çalışmanızı sağlar.
 - Her metin bloğunun kendi font boyutu, satır aralığı, harf aralığı ve konumu bulunur; blokları sürükleyip bırakabilir ve aynı projede farklı kombinasyonlar kullanabilirsiniz.
+- Metin bloklarını üstteki döndürme tutamacıyla fareyle çevirebilir, aynı sahneye dikdörtgen, çizgi ve yön oku şekilleri ekleyip bu öğeleri de bağımsız olarak döndürebilir ve konumlandırabilirsiniz.
 - `.ttf` veya `.otf` fontlarını yükleyerek konturları tek çizgilik merkez hattına dönüştürür; scikit-image tabanlı medial-axis + OpenCV inceltme kombinasyonu sayesinde çizgiler daha düzgün ve kesintisizdir.
 - Boşta ve çizim hızlarını mm/s cinsinden girip G-code üretimi sırasında otomatik olarak mm/dakikaya dönüştürür.
 - Proje ayarlarını JSON olarak kaydedip daha sonra tekrar yükleyebilir, G-code çıktısını tek tuşla kaydedebilirsiniz.
@@ -95,7 +96,8 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 10. Açılan pencerede şu adımları uygulayın:
     - **TTF font seç** butonuna tıklayıp istediğiniz `.ttf` veya `.otf` dosyasını seçin (ör. `C:\Users\cangu\Desktop\Fontlar\el_yazisi.ttf`).
     - Sol paneldeki **Metin bloğu ekle** butonu ile istediğiniz kadar blok oluşturun; her blokta font boyutu, satır aralığı ve harf aralığı farklı olabilir.
-    - Sağdaki ızgaradan blokları fareyle sürükleyerek yatak sınırları içinde yerleştirin; önizleme, blok yatak dışına taşarsa kırmızı bir uyarı gösterir.
+    - **Şekiller** bölümünden dikdörtgen, çizgi veya yön oku ekleyin; boyutlarını milimetre cinsinden girip metinler gibi sahnede sürükleyip bırakabilirsiniz.
+    - Sağdaki ızgaradan metin ve şekilleri fareyle sürükleyerek yatak sınırları içinde yerleştirin; her öğenin üstündeki turuncu tutamaçı fareyle sürükleyerek istediğiniz açıya döndürebilirsiniz. Önizleme, öğe yatak dışına taşarsa kırmızı bir uyarı gösterir.
     - Üst kısımdaki Bed/Pen ayarlarından yatak boyutu, pen offset, ilk yaklaşma ve pen yukarı/aşağı değerleri ile boşta/çizim hızlarını milimetre/saniye cinsinden girin; pen offset için turuncu kılavuz çizgileri çalışma alanında görüntülenir.
     - Varsayılan merkez hattı (centerline) modu konturları tek vuruşlu çizgilere indirger; gerekirse G-code kaydetmeden önce komut satırı sürümünde `--stroke-mode outline` kullanabilirsiniz.
     - **Projeyi kaydet** diyerek tüm parametreleri `.json` olarak saklayabilir, **Projeyi aç** ile tekrar yükleyebilirsiniz.
