@@ -98,8 +98,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     if not sorted_loops:
         return open_paths
 
-    reference_area = _signed_area(sorted_loops[0])
-    reference_sign = 1.0 if reference_area >= 0.0 else -1.0
+    processed_loops: List[Sequence[Point]] = []
 
     for path in sorted_loops:
         if len(path) < 3:
@@ -114,8 +113,13 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
         loop_area = _signed_area(path)
         if loop_area == 0.0:
             continue
-        fill_value = 1 if math.copysign(1.0, loop_area) == reference_sign else 0
+        centroid = _polygon_centroid(path)
+        winding_depth = sum(
+            1 for other in processed_loops if _point_in_polygon(centroid, other)
+        )
+        fill_value = 1 if winding_depth % 2 == 0 else 0
         draw.polygon(draw_points, fill=fill_value)
+        processed_loops.append(path)
 
     bitmap = np.array(raster, dtype=np.uint8)
     if not bitmap.any():
@@ -191,6 +195,69 @@ def _signed_area(path: Sequence[Point]) -> float:
     for (x1, y1), (x2, y2) in zip(path, path[1:]):
         area += (x1 * y2) - (x2 * y1)
     return area * 0.5
+
+
+def _polygon_centroid(path: Sequence[Point]) -> Point:
+    if not path:
+        return (0.0, 0.0)
+
+    twice_area = 0.0
+    cx = 0.0
+    cy = 0.0
+
+    points = list(path)
+    if points[0] != points[-1]:
+        points.append(points[0])
+
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        cross = (x0 * y1) - (x1 * y0)
+        twice_area += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+
+    if abs(twice_area) < 1e-9:
+        avg_x = sum(x for x, _ in path) / len(path)
+        avg_y = sum(y for _, y in path) / len(path)
+        return avg_x, avg_y
+
+    area = twice_area * 0.5
+    return (cx / (3.0 * twice_area), cy / (3.0 * twice_area)) if area != 0 else (
+        sum(x for x, _ in path) / len(path),
+        sum(y for _, y in path) / len(path),
+    )
+
+
+def _point_on_segment(point: Point, a: Point, b: Point) -> bool:
+    (px, py) = point
+    (ax, ay) = a
+    (bx, by) = b
+    cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+    if abs(cross) > 1e-9:
+        return False
+    dot = (px - ax) * (px - bx) + (py - ay) * (py - by)
+    return dot <= 1e-9
+
+
+def _point_in_polygon(point: Point, polygon: Sequence[Point]) -> bool:
+    if not polygon:
+        return False
+
+    x, y = point
+    inside = False
+    points = list(polygon)
+    if points[0] != points[-1]:
+        points.append(points[0])
+
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if _point_on_segment(point, (x0, y0), (x1, y1)):
+            return True
+        intersects = ((y0 > y) != (y1 > y)) and (
+            x < (x1 - x0) * (y - y0) / (y1 - y0 + 1e-12) + x0
+        )
+        if intersects:
+            inside = not inside
+
+    return inside
 
 
 def _zhang_suen_thinning(image: np.ndarray) -> np.ndarray:
