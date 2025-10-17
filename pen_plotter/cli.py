@@ -52,6 +52,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Maximum deviation in millimetres when approximating curves.",
     )
     parser.add_argument(
+        "--stroke-mode",
+        choices=("centerline", "outline"),
+        default="centerline",
+        help="Choose between centerline (single stroke) or outline paths.",
+    )
+    parser.add_argument(
         "--travel-height",
         type=float,
         default=5.0,
@@ -126,6 +132,7 @@ def main(argv: list[str] | None = None) -> None:
         line_spacing=args.line_spacing,
         character_spacing=args.char_spacing,
         curve_tolerance=args.curve_tolerance,
+        stroke_mode=args.stroke_mode,
     )
 
     with FontLoader(str(args.font)) as font_loader:

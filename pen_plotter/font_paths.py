@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Literal, Sequence, Tuple
 
 from fontTools.misc import bezierTools
 from fontTools.pens.basePen import BasePen
 from fontTools.pens.recordingPen import RecordingPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
+
+from .centerline import outlines_to_centerlines
 
 Point = Tuple[float, float]
 Path = List[Point]
@@ -32,6 +34,7 @@ class LayoutSettings:
     line_spacing: float = 1.3
     character_spacing: float = 0.0
     curve_tolerance: float = 0.1
+    stroke_mode: Literal["outline", "centerline"] = "centerline"
 
 
 class FontLoader:
@@ -47,6 +50,10 @@ class FontLoader:
         self.ascent = hhea.ascent
         self.descent = hhea.descent
         self._horizontal_metrics = self._font["hmtx"]
+        self._outline_cache: dict[Tuple[str, float, float], GlyphPaths] = {}
+        self._centerline_cache: dict[
+            Tuple[str, float, float, float], List[Path]
+        ] = {}
 
     def close(self) -> None:
         self._font.close()
@@ -68,20 +75,56 @@ class FontLoader:
         offset: Tuple[float, float],
         curve_error_units: float,
     ) -> GlyphPaths:
-        glyph = self._glyph_set[glyph_name]
-        advance_width, _ = self._horizontal_metrics[glyph_name]
-        recording_pen = RecordingPen()
-        transform = (scale, 0.0, 0.0, scale, offset[0], offset[1])
-        polyline_pen = _PolylinePen(
-            glyph_set=self._glyph_set,
-            out_pen=TransformPen(recording_pen, transform),
-            tolerance=max(curve_error_units, 1e-3),
+        cache_key = (glyph_name, scale, curve_error_units)
+        cached = self._outline_cache.get(cache_key)
+        if cached is None:
+            glyph = self._glyph_set[glyph_name]
+            advance_width, _ = self._horizontal_metrics[glyph_name]
+            recording_pen = RecordingPen()
+            transform = (scale, 0.0, 0.0, scale, 0.0, 0.0)
+            polyline_pen = _PolylinePen(
+                glyph_set=self._glyph_set,
+                out_pen=TransformPen(recording_pen, transform),
+                tolerance=max(curve_error_units, 1e-3),
+            )
+            glyph.draw(polyline_pen)
+            cached = GlyphPaths(
+                advance_width=advance_width * scale,
+                paths=_recording_to_paths(recording_pen.value),
+            )
+            self._outline_cache[cache_key] = cached
+
+        if offset == (0.0, 0.0):
+            translated_paths = [list(path) for path in cached.paths]
+        else:
+            translated_paths = [
+                [(x + offset[0], y + offset[1]) for x, y in path]
+                for path in cached.paths
+            ]
+
+        return GlyphPaths(advance_width=cached.advance_width, paths=translated_paths)
+
+    def glyph_centerline_paths(
+        self,
+        glyph_name: str,
+        scale: float,
+        curve_error_units: float,
+        tolerance_mm: float,
+    ) -> List[Path]:
+        cache_key = (glyph_name, scale, curve_error_units, tolerance_mm)
+        cached = self._centerline_cache.get(cache_key)
+        if cached is not None:
+            return [list(path) for path in cached]
+
+        outline = self.glyph_paths(
+            glyph_name,
+            scale=scale,
+            offset=(0.0, 0.0),
+            curve_error_units=curve_error_units,
         )
-        glyph.draw(polyline_pen)
-        return GlyphPaths(
-            advance_width=advance_width * scale,
-            paths=_recording_to_paths(recording_pen.value),
-        )
+        centerlines = outlines_to_centerlines(outline.paths, tolerance_mm)
+        self._centerline_cache[cache_key] = [list(path) for path in centerlines]
+        return centerlines
 
 
 def layout_text(
@@ -119,15 +162,30 @@ def layout_text(
                 x_offset += average_advance + settings.character_spacing
                 continue
 
-            glyph_paths = font_loader.glyph_paths(
+            glyph_outline = font_loader.glyph_paths(
                 glyph_name,
                 scale=scale,
-                offset=(x_offset, y_offset),
+                offset=(0.0, 0.0),
                 curve_error_units=curve_error_units,
             )
 
-            all_paths.extend(glyph_paths.paths)
-            x_offset += glyph_paths.advance_width + settings.character_spacing
+            if settings.stroke_mode == "centerline":
+                base_paths = font_loader.glyph_centerline_paths(
+                    glyph_name,
+                    scale=scale,
+                    curve_error_units=curve_error_units,
+                    tolerance_mm=settings.curve_tolerance,
+                )
+            else:
+                base_paths = glyph_outline.paths
+
+            translated_paths = [
+                [(x + x_offset, y + y_offset) for x, y in path]
+                for path in base_paths
+            ]
+
+            all_paths.extend(translated_paths)
+            x_offset += glyph_outline.advance_width + settings.character_spacing
 
         x_offset = 0.0
         y_offset -= line_height

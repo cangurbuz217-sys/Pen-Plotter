@@ -6,7 +6,7 @@ Bu depo, TrueType fontları kullanarak istediğiniz metni 3B yazıcı veya pen p
 
 - Yeni **Pen Plotter Studio** masaüstü arayüzü; yatak boyutunu, pen ofsetlerini ve pen yukarı/aşağı yüksekliklerini belirleyip canlı önizleme ile sınırlar içinde çalışmanızı sağlar.
 - Her metin bloğunun kendi font boyutu, satır aralığı, harf aralığı ve konumu bulunur; blokları sürükleyip bırakabilir ve aynı projede farklı kombinasyonlar kullanabilirsiniz.
-- `.ttf` veya `.otf` fontlarını yükleyerek Bézier konturlarını otomatik olarak çizgi segmentlerine çevirir.
+- `.ttf` veya `.otf` fontlarını yükleyerek konturları tek çizgilik merkez hattına dönüştürür; böylece kalem tek bir stroke ile harfleri yazar.
 - Boşta ve çizim hızlarını mm/s cinsinden girip G-code üretimi sırasında otomatik olarak mm/dakikaya dönüştürür.
 - Proje ayarlarını JSON olarak kaydedip daha sonra tekrar yükleyebilir, G-code çıktısını tek tuşla kaydedebilirsiniz.
 - Konturlar oluşturulmadan önce tahmini boyut ve çizim uzunluğu için ön izleme sağlar.
@@ -33,6 +33,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 - `--line-spacing`: Satırlar arasındaki çarpan (1.3 varsayılan).
 - `--char-spacing`: Harfler arasına ekstra boşluk ekler.
 - `--curve-tolerance`: Bézier eğrilerinin çizgi segmentlerine çevrilirken izin verilen maksimum sapma (mm).
+- `--stroke-mode`: Varsayılan `centerline` değeri tek çizgi vuruşları üretir; gerekirse `outline` seçeneği konturları iki çizgi olarak korur.
 - `--center`: Metni koordinat düzleminin merkezine hizalar.
 - `--origin-x`, `--origin-y`: Metni belirtilen konuma taşır.
 - `--preview`: G-code kaydedilmeden önce boyut ve toplam çizim uzunluğunu yazdırır.
@@ -61,10 +62,10 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
    .\pen-plotter-gui\Scripts\Activate.ps1
    ```
 
-6. Gerekli paketi yükleyin:
+6. Gerekli paketleri yükleyin:
 
    ```powershell
-   pip install fonttools
+   pip install -r requirements.txt
    ```
 
 7. Depoyu eksiksiz indirmek için aşağıdaki PowerShell komutunu çalıştırın. Kendi GitHub kullanıcı adınızı ve depo adınızı kullanmayı unutmayın (örnek: `https://codeload.github.com/cangu/Pen-Plotter/zip/refs/heads/main`).
@@ -95,6 +96,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
     - Sol paneldeki **Metin bloğu ekle** butonu ile istediğiniz kadar blok oluşturun; her blokta font boyutu, satır aralığı ve harf aralığı farklı olabilir.
     - Sağdaki ızgaradan blokları fareyle sürükleyerek yatak sınırları içinde yerleştirin; önizleme, blok yatak dışına taşarsa kırmızı bir uyarı gösterir.
     - Üst kısımdaki Bed/Pen ayarlarından yatak boyutu, pen offset, pen yukarı/aşağı değerleri ile boşta/çizim hızlarını milimetre/saniye cinsinden girin; pen offset için turuncu kılavuz çizgileri çalışma alanında görüntülenir.
+    - Varsayılan merkez hattı (centerline) modu konturları tek vuruşlu çizgilere indirger; gerekirse G-code kaydetmeden önce komut satırı sürümünde `--stroke-mode outline` kullanabilirsiniz.
     - **Projeyi kaydet** diyerek tüm parametreleri `.json` olarak saklayabilir, **Projeyi aç** ile tekrar yükleyebilirsiniz.
     - **G-code kaydet** butonuyla oluşturulan yolları kaydedip cihazınıza aktarabilirsiniz; pen offset değeri otomatik uygulanır.
 
@@ -107,6 +109,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 Modül yapısı:
 
 - `pen_plotter/font_paths.py`: Font konturlarını çoklu çizgi (polyline) yollarına çevirir.
+- `pen_plotter/centerline.py`: Kontur dolgusunu inceleyerek tek stroke merkez hatlarını üretir.
 - `pen_plotter/gcode.py`: Çoklu çizgi yollarını pen plotter dostu G-code komutlarına dönüştürür.
 - `pen_plotter/cli.py`: Komut satırı arabirimi.
 
