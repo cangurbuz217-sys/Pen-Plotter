@@ -149,7 +149,7 @@ def outlines_to_centerlines(paths: Sequence[Path], tolerance: float) -> List[Pat
     if not thinned.any():
         return open_paths
 
-    min_branch_length = max(4, int(round(px_per_mm * 0.75)))
+    min_branch_length = max(4, int(round(px_per_mm * 0.45)))
     if min_branch_length >= 2:
         _prune_short_branches(thinned, min_branch_length)
 
@@ -499,9 +499,11 @@ def _component_fallback_loop(
 
     width = max_x - min_x
     height = max_y - min_y
-    base_radius = max(width, height, 1.0 / context.px_per_mm) * 0.5
-    min_diameter = max(tolerance * 14.0, 4.0)
-    radius = max(base_radius, min_diameter * 0.5)
+    intrinsic_diameter = max(width, height)
+    min_visible = max(tolerance * 8.0, 1.6)
+    max_visible = max(intrinsic_diameter * 1.8, min_visible)
+    target_diameter = min(max(intrinsic_diameter, min_visible), max_visible)
+    radius = max(target_diameter * 0.5, 0.5 / context.px_per_mm)
 
     circumference = 2.0 * math.pi * radius
     step = max(tolerance * 0.5, 0.3)
