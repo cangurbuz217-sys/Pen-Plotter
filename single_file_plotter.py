@@ -554,376 +554,779 @@ def generate_and_save_gcode(text: str, args: argparse.Namespace) -> None:
     print(f"G-code '{args.output}' dosyasına yazıldı.")
 
 
-def run_gui_mode() -> None:
-    """Tkinter tabanlı Pen Plotter Studio arayüzünü başlatır."""
 
-    if tk is None:
-        print(
-            "Bu sistemde Tkinter modülü bulunamadı. Komut satırı moduna geçiliyor."
-        )
-        run_interactive_mode()
-        return
+if tk is not None:
 
-    root = tk.Tk()
-    root.withdraw()
+    class _GUITextBlock:
+        def __init__(
+            self,
+            app: "_PenPlotterStudio",
+            uid: int,
+            initial_text: str,
+        ) -> None:
+            self.app = app
+            self.uid = uid
+            self.frame = ttk.Frame(app.blocks_container, padding=(8, 8))
+            self.header_var = tk.StringVar(value="")
+            self.position_var = tk.StringVar(value="Pozisyon: X=0.0 mm | Y=0.0 mm")
+            header = ttk.Frame(self.frame)
+            header.pack(fill="x", pady=(0, 6))
+            ttk.Label(
+                header,
+                textvariable=self.header_var,
+                font=("TkDefaultFont", 10, "bold"),
+            ).pack(side="left")
+            ttk.Label(header, textvariable=self.position_var).pack(side="left", padx=(8, 0))
+            ttk.Button(
+                header,
+                text="✕",
+                width=3,
+                command=lambda: app.remove_block(self),
+            ).pack(side="right")
 
-    try:
-        _ensure_fonttools_installed()
-    except ModuleNotFoundError:
-        error_message = (
-            "fonttools paketi bulunamadı. Komut satırında `pip install fonttools` "
-            "komutunu çalıştırıp tekrar deneyin."
-        )
-        if messagebox is not None:
-            messagebox.showerror("Bağımlılık Eksik", error_message)
-        else:
-            print(error_message)
-        root.destroy()
-        return
+            controls = ttk.Frame(self.frame)
+            controls.pack(fill="x", pady=(0, 6))
+            controls.columnconfigure(0, weight=1)
+            controls.columnconfigure(1, weight=1)
+            controls.columnconfigure(2, weight=1)
 
-    root.title("Pen Plotter Studio (Tek Dosya)")
-    root.geometry("980x660")
-    root.minsize(860, 620)
-    root.deiconify()
+            self.font_size_var = tk.StringVar(value="14")
+            self.line_spacing_var = tk.StringVar(value="1.3")
+            self.char_spacing_var = tk.StringVar(value="0")
 
-    try:  # Varsayılan temayı modern bir temayla değiştirmeye çalış
-        style = ttk.Style()
-        if "clam" in style.theme_names():
-            style.theme_use("clam")
-    except Exception:  # pragma: no cover - tema hataları önemsiz
-        pass
-
-    main = ttk.Frame(root, padding=12)
-    main.grid(column=0, row=0, sticky="nsew")
-    root.columnconfigure(0, weight=1)
-    root.rowconfigure(0, weight=1)
-    main.columnconfigure(0, weight=1)
-    main.columnconfigure(1, weight=0)
-    main.rowconfigure(0, weight=1)
-    main.rowconfigure(1, weight=1)
-
-    text_frame = ttk.LabelFrame(main, text="Metin")
-    text_frame.grid(column=0, row=0, sticky="nsew")
-    text_frame.columnconfigure(0, weight=1)
-    text_frame.rowconfigure(0, weight=1)
-
-    text_widget = tk.Text(text_frame, wrap="word", height=8, font=("Segoe UI", 11))
-    text_widget.grid(column=0, row=0, sticky="nsew")
-    text_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
-    text_scroll.grid(column=1, row=0, sticky="ns")
-    text_widget.configure(yscrollcommand=text_scroll.set)
-    text_widget.insert("1.0", "Pen Plotter Studio\nHoş geldiniz!")
-
-    preview_frame = ttk.LabelFrame(main, text="Önizleme")
-    preview_frame.grid(column=0, row=1, sticky="nsew", pady=(12, 0))
-    preview_frame.columnconfigure(0, weight=1)
-    preview_frame.rowconfigure(0, weight=1)
-
-    CANVAS_WIDTH = 540
-    CANVAS_HEIGHT = 360
-    canvas = tk.Canvas(
-        preview_frame,
-        width=CANVAS_WIDTH,
-        height=CANVAS_HEIGHT,
-        background="#ffffff",
-        highlightthickness=1,
-        highlightbackground="#c7cad1",
-    )
-    canvas.grid(column=0, row=0, sticky="nsew")
-
-    metrics_var = tk.StringVar(value="Font seçip önizleme oluşturun.")
-    metrics_label = ttk.Label(preview_frame, textvariable=metrics_var, anchor="w")
-    metrics_label.grid(column=0, row=1, sticky="ew", pady=(8, 0))
-
-    controls = ttk.LabelFrame(main, text="Ayarlar")
-    controls.grid(column=1, row=0, rowspan=2, sticky="ns", padx=(12, 0))
-    for idx in range(4):
-        controls.rowconfigure(idx, weight=0)
-    controls.columnconfigure(0, weight=1)
-
-    font_path_var = tk.StringVar(value="")
-
-    font_frame = ttk.Frame(controls)
-    font_frame.grid(column=0, row=0, sticky="ew", pady=(0, 12))
-    font_frame.columnconfigure(0, weight=1)
-
-    font_label_var = tk.StringVar(value="Seçilmedi")
-    font_label = ttk.Label(font_frame, textvariable=font_label_var, width=32)
-    font_label.grid(column=0, row=0, sticky="w")
-
-    def select_font() -> None:
-        if filedialog is None:
-            return
-        file_path = filedialog.askopenfilename(
-            title="TrueType font seç",
-            filetypes=[("TrueType Font", "*.ttf"), ("Tüm dosyalar", "*.*")],
-        )
-        if not file_path:
-            return
-        font_path_var.set(file_path)
-        font_label_var.set(Path(file_path).name)
-        refresh_preview(show_dialog=True)
-
-    ttk.Button(font_frame, text="Font Seç (.ttf)", command=select_font).grid(
-        column=0, row=1, sticky="ew", pady=(6, 0)
-    )
-
-    defaults = {
-        "font_size": "14",
-        "line_spacing": "1.3",
-        "char_spacing": "0",
-        "curve_tolerance": "0.1",
-        "origin_x": "0",
-        "origin_y": "0",
-        "travel_height": "5",
-        "drawing_height": "0",
-        "travel_feed": "3000",
-        "drawing_feed": "1200",
-    }
-
-    labels = {
-        "font_size": "Yazı boyutu (mm)",
-        "line_spacing": "Satır aralığı", 
-        "char_spacing": "Harf arası (mm)",
-        "curve_tolerance": "Eğri toleransı (mm)",
-        "origin_x": "X ofseti (mm)",
-        "origin_y": "Y ofseti (mm)",
-        "travel_height": "Kalem yukarı Z (mm)",
-        "drawing_height": "Kalem aşağı Z (mm)",
-        "travel_feed": "Boşta hız (mm/dak)",
-        "drawing_feed": "Çizim hızı (mm/dak)",
-    }
-
-    entry_vars: dict[str, tk.StringVar] = {}
-
-    def add_labeled_entry(row: int, key: str) -> None:
-        label = ttk.Label(controls, text=labels[key])
-        label.grid(column=0, row=row, sticky="w")
-        entry_var = tk.StringVar(value=defaults[key])
-        entry = ttk.Entry(controls, textvariable=entry_var)
-        entry.grid(column=0, row=row + 1, sticky="ew", pady=(0, 8))
-        entry_vars[key] = entry_var
-
-    row_index = 1
-    for field_key in (
-        "font_size",
-        "line_spacing",
-        "char_spacing",
-        "curve_tolerance",
-        "origin_x",
-        "origin_y",
-        "travel_height",
-        "drawing_height",
-        "travel_feed",
-        "drawing_feed",
-    ):
-        add_labeled_entry(row_index, field_key)
-        row_index += 2
-
-    center_var = tk.BooleanVar(value=True)
-    ttk.Checkbutton(
-        controls,
-        text="Metni (0,0) etrafında ortala",
-        variable=center_var,
-    ).grid(column=0, row=row_index, sticky="w", pady=(4, 8))
-    row_index += 1
-
-    status_var = tk.StringVar(value="Hazır")
-
-    state: dict[str, object] = {
-        "paths": [],
-        "settings": None,
-        "metrics": None,
-    }
-
-    def parse_float(key: str) -> float:
-        raw = entry_vars[key].get().strip()
-        if not raw:
-            raw = defaults[key]
-        raw = raw.replace(",", ".")
-        try:
-            return float(raw)
-        except ValueError as exc:
-            raise ValueError(f"{labels[key]} için geçerli bir sayı girin.") from exc
-
-    def compute_paths_settings() -> tuple[List[PathType], tuple[float, float, float, float, float], PlotterSettings]:
-        font_path_str = font_path_var.get().strip()
-        if not font_path_str:
-            raise ValueError("Lütfen bir .ttf font dosyası seçin.")
-
-        text_value = text_widget.get("1.0", "end-1c")
-        if not text_value.strip():
-            raise ValueError("Metin alanı boş olamaz.")
-
-        font_path = Path(font_path_str)
-        with SimpleFontLoader(font_path) as font_loader:
-            paths = layout_text(
-                text_value,
-                font_loader,
-                font_size=parse_float("font_size"),
-                line_spacing=parse_float("line_spacing"),
-                character_spacing=parse_float("char_spacing"),
-                curve_tolerance=parse_float("curve_tolerance"),
+            ttk.Label(controls, text="Boyut (mm)").grid(column=0, row=0, sticky="w")
+            ttk.Entry(controls, textvariable=self.font_size_var, width=8).grid(
+                column=0,
+                row=1,
+                sticky="ew",
+                padx=(0, 6),
             )
 
-        if center_var.get():
-            min_x, min_y, max_x, max_y, _ = measure_paths(paths)
-            center_x = (min_x + max_x) / 2.0
-            center_y = (min_y + max_y) / 2.0
-            paths = translate_paths(paths, -center_x, -center_y)
-
-        origin_x = parse_float("origin_x")
-        origin_y = parse_float("origin_y")
-        if origin_x or origin_y:
-            paths = translate_paths(paths, origin_x, origin_y)
-
-        metrics = measure_paths(paths)
-        comment = f"Pen Plotter Studio GUI - {font_path.name}"[:80]
-        settings = PlotterSettings(
-            travel_height=parse_float("travel_height"),
-            drawing_height=parse_float("drawing_height"),
-            travel_feed_rate=parse_float("travel_feed"),
-            drawing_feed_rate=parse_float("drawing_feed"),
-            comment=comment,
-        )
-        return paths, metrics, settings
-
-    def draw_preview(paths: List[PathType], metrics: tuple[float, float, float, float, float]) -> None:
-        canvas.delete("all")
-        min_x, min_y, max_x, max_y, total_length = metrics
-        width = max_x - min_x
-        height = max_y - min_y
-
-        if not paths or (width == 0 and height == 0):
-            canvas.create_text(
-                CANVAS_WIDTH / 2,
-                CANVAS_HEIGHT / 2,
-                text="Önizleme için metin girin ve font seçin",
-                fill="#6c6f7a",
+            ttk.Label(controls, text="Satır aralığı").grid(column=1, row=0, sticky="w")
+            ttk.Entry(controls, textvariable=self.line_spacing_var, width=8).grid(
+                column=1,
+                row=1,
+                sticky="ew",
+                padx=(0, 6),
             )
-            metrics_var.set("Önizleme hazır değil.")
-            return
 
-        margin = 24
-        scale_x = (CANVAS_WIDTH - margin * 2) / (width if width != 0 else 1)
-        scale_y = (CANVAS_HEIGHT - margin * 2) / (height if height != 0 else 1)
-        scale = min(scale_x, scale_y)
-        if scale <= 0:
-            scale = 1.0
-
-        offset_x = margin - min_x * scale
-        offset_y = margin - min_y * scale
-
-        # Koordinatları Canvas sistemine çevirirken Y eksenini ters çeviriyoruz
-        for path in paths:
-            if len(path) < 2:
-                continue
-            coords: list[float] = []
-            for x, y in path:
-                draw_x = x * scale + offset_x
-                draw_y = CANVAS_HEIGHT - (y * scale + offset_y)
-                coords.extend((draw_x, draw_y))
-            canvas.create_line(coords, fill="#1f77b4", width=2, smooth=False)
-
-        bbox_left = min_x * scale + offset_x
-        bbox_top = CANVAS_HEIGHT - (max_y * scale + offset_y)
-        bbox_right = max_x * scale + offset_x
-        bbox_bottom = CANVAS_HEIGHT - (min_y * scale + offset_y)
-        canvas.create_rectangle(
-            bbox_left,
-            bbox_top,
-            bbox_right,
-            bbox_bottom,
-            outline="#b9bdc6",
-            dash=(4, 3),
-        )
-
-        metrics_var.set(
-            "Genişlik: {:.2f} mm | Yükseklik: {:.2f} mm | Yol uzunluğu: {:.2f} mm".format(
-                width,
-                height,
-                total_length,
+            ttk.Label(controls, text="Harf boşluğu (mm)").grid(column=2, row=0, sticky="w")
+            ttk.Entry(controls, textvariable=self.char_spacing_var, width=8).grid(
+                column=2,
+                row=1,
+                sticky="ew",
             )
-        )
 
-    def refresh_preview(show_dialog: bool = False) -> None:
-        try:
-            paths, metrics, settings = compute_paths_settings()
-        except Exception as exc:
-            state["paths"] = []
-            state["settings"] = None
-            state["metrics"] = None
+            self.text_widget = tk.Text(self.frame, height=4, wrap="word")
+            self.text_widget.pack(fill="both", expand=True)
+            if initial_text:
+                self.text_widget.insert("1.0", initial_text)
+            self.text_widget.edit_modified(False)
+            self.text_widget.bind("<<Modified>>", self._on_text_modified)
+
+            for variable in (
+                self.font_size_var,
+                self.line_spacing_var,
+                self.char_spacing_var,
+            ):
+                variable.trace_add("write", lambda *_: app.schedule_preview())
+
+            self.translation_x = 10.0
+            self.translation_y = 10.0
+            self.local_bounds: tuple[float, float, float, float] | None = None
+            self.current_bounds: tuple[float, float, float, float] | None = None
+            self.color = "#1f77b4"
+
+        def _on_text_modified(self, _event: tk.Event) -> None:
+            if self.text_widget.edit_modified():
+                self.text_widget.edit_modified(False)
+                self.app.schedule_preview()
+
+        def set_display_index(self, index: int, color: str) -> None:
+            self.header_var.set(f"Metin Bloğu {index}")
+            self.color = color
+
+        def update_position_label(self) -> None:
+            self.position_var.set(
+                f"Pozisyon: X={self.translation_x:.1f} mm | Y={self.translation_y:.1f} mm"
+            )
+
+        def destroy(self) -> None:
+            self.frame.destroy()
+
+
+    class _PenPlotterStudio:
+        CANVAS_BG = "#f6f7fb"
+        BLOCK_COLORS = [
+            "#1f77b4",
+            "#d62728",
+            "#2ca02c",
+            "#9467bd",
+            "#ff7f0e",
+            "#17becf",
+        ]
+
+        def __init__(self, root: tk.Tk) -> None:
+            self.root = root
+            root.title("Pen Plotter Studio")
+            root.minsize(980, 660)
+
+            self.hardware_defaults = {
+                "bed_x": "235",
+                "bed_y": "235",
+                "pen_offset_x": "0",
+                "pen_offset_y": "0",
+                "pen_up": "5",
+                "pen_down": "0",
+                "travel_feed": "3000",
+                "drawing_feed": "1200",
+            }
+            self.hardware_defaults_float = {
+                key: float(value) for key, value in self.hardware_defaults.items()
+            }
+            self.hardware_labels = {
+                "bed_x": "Bed X (mm)",
+                "bed_y": "Bed Y (mm)",
+                "pen_offset_x": "Pen offset X (mm)",
+                "pen_offset_y": "Pen offset Y (mm)",
+                "pen_up": "Kalem yukarı (mm)",
+                "pen_down": "Kalem aşağı (mm)",
+                "travel_feed": "Boşta hız (mm/dak)",
+                "drawing_feed": "Çizim hızı (mm/dak)",
+            }
+
+            self.hardware_vars = {
+                key: tk.StringVar(value=value) for key, value in self.hardware_defaults.items()
+            }
+            self.curve_tolerance_var = tk.StringVar(value="0.1")
+            self.font_path_var = tk.StringVar(value="")
+
+            self.status_var = tk.StringVar(value="Hazır")
+            self.metrics_var = tk.StringVar(value="Önizleme bekleniyor.")
+
+            self.blocks: list[_GUITextBlock] = []
+            self.block_uid_counter = 1
+            self.block_bounds_mm: dict[int, tuple[float, float, float, float]] = {}
+            self.preview_paths: List[PathType] = []
+            self.preview_settings: PlotterSettings | None = None
+            self.preview_metrics: tuple[float, float, float, float, float] | None = None
+            self.preview_pen_offset = (0.0, 0.0)
+            self.current_bed_size = (
+                self.hardware_defaults_float["bed_x"],
+                self.hardware_defaults_float["bed_y"],
+            )
+            self.canvas_transform = (1.0, 24.0, 24.0)
+            self.drag_block: _GUITextBlock | None = None
+            self.drag_offset = (0.0, 0.0)
+            self._preview_pending = False
+
+            self.canvas_width = 640
+            self.canvas_height = 540
+
+            self._build_ui()
+            self.add_block("Pen Plotter Studio'ya hoş geldiniz!")
+            self.schedule_preview()
+
+        def _build_ui(self) -> None:
+            main = ttk.Frame(self.root, padding=16)
+            main.grid(column=0, row=0, sticky="nsew")
+            self.root.columnconfigure(0, weight=1)
+            self.root.rowconfigure(0, weight=1)
+            main.columnconfigure(0, weight=0)
+            main.columnconfigure(1, weight=1)
+            main.rowconfigure(0, weight=1)
+            main.rowconfigure(1, weight=0)
+
+            controls = ttk.Frame(main)
+            controls.grid(column=0, row=0, sticky="nsw", padx=(0, 16))
+            controls.columnconfigure(0, weight=1)
+            controls.rowconfigure(2, weight=1)
+
+            ttk.Label(
+                controls,
+                text="Pen Plotter Studio",
+                font=("TkDefaultFont", 16, "bold"),
+            ).grid(column=0, row=0, sticky="w", pady=(0, 12))
+
+            hardware_frame = ttk.LabelFrame(controls, text="Hardware setup")
+            hardware_frame.grid(column=0, row=1, sticky="ew", pady=(0, 12))
+            for i in range(4):
+                hardware_frame.columnconfigure(i, weight=1)
+
+            self._add_hardware_entry(hardware_frame, "bed_x", 0, 0)
+            self._add_hardware_entry(hardware_frame, "bed_y", 0, 1)
+            self._add_hardware_entry(hardware_frame, "pen_offset_x", 1, 0)
+            self._add_hardware_entry(hardware_frame, "pen_offset_y", 1, 1)
+            self._add_hardware_entry(hardware_frame, "pen_up", 2, 0)
+            self._add_hardware_entry(hardware_frame, "pen_down", 2, 1)
+            self._add_hardware_entry(hardware_frame, "travel_feed", 3, 0)
+            self._add_hardware_entry(hardware_frame, "drawing_feed", 3, 1)
+
+            ttk.Label(hardware_frame, text="Eğri toleransı (mm)").grid(
+                column=0,
+                row=4,
+                sticky="w",
+                pady=(8, 0),
+            )
+            ttk.Entry(hardware_frame, textvariable=self.curve_tolerance_var, width=8).grid(
+                column=0,
+                row=5,
+                sticky="ew",
+                pady=(0, 8),
+            )
+            self.curve_tolerance_var.trace_add("write", lambda *_: self.schedule_preview())
+
+            font_frame = ttk.LabelFrame(controls, text="Your text")
+            font_frame.grid(column=0, row=2, sticky="nsew")
+            font_frame.columnconfigure(0, weight=1)
+            font_frame.rowconfigure(2, weight=1)
+
+            ttk.Button(font_frame, text="TTF font seç", command=self.choose_font).grid(
+                column=0,
+                row=0,
+                sticky="ew",
+                pady=(4, 6),
+            )
+            ttk.Label(font_frame, textvariable=self.font_path_var, wraplength=240, justify="left").grid(
+                column=0,
+                row=1,
+                sticky="w",
+                pady=(0, 8),
+            )
+
+            blocks_panel = ttk.Frame(font_frame)
+            blocks_panel.grid(column=0, row=2, sticky="nsew")
+            blocks_panel.columnconfigure(0, weight=1)
+            blocks_panel.rowconfigure(1, weight=1)
+
+            ttk.Button(
+                blocks_panel,
+                text="Metin bloğu ekle",
+                command=self.add_block,
+            ).grid(column=0, row=0, sticky="ew", pady=(0, 8))
+
+            self.blocks_container = ttk.Frame(blocks_panel)
+            self.blocks_container.grid(column=0, row=1, sticky="nsew")
+            self.blocks_container.columnconfigure(0, weight=1)
+
+            preview_frame = ttk.Frame(main)
+            preview_frame.grid(column=1, row=0, sticky="nsew")
+            preview_frame.columnconfigure(0, weight=1)
+            preview_frame.rowconfigure(0, weight=1)
+
+            self.canvas = tk.Canvas(
+                preview_frame,
+                background=self.CANVAS_BG,
+                highlightthickness=0,
+            )
+            self.canvas.grid(column=0, row=0, sticky="nsew")
+            self.canvas.bind("<Configure>", self._on_canvas_configure)
+            self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+            self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
+            self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+
+            ttk.Label(preview_frame, textvariable=self.metrics_var, anchor="center").grid(
+                column=0,
+                row=1,
+                sticky="ew",
+                pady=(12, 0),
+            )
+
+            footer = ttk.Frame(main)
+            footer.grid(column=0, row=1, columnspan=2, sticky="ew", pady=(12, 0))
+            footer.columnconfigure(0, weight=1)
+            footer.columnconfigure(1, weight=0)
+            footer.columnconfigure(2, weight=0)
+
+            ttk.Label(footer, textvariable=self.status_var, anchor="w").grid(
+                column=0,
+                row=0,
+                sticky="w",
+            )
+            ttk.Button(footer, text="Önizlemeyi güncelle", command=self.force_refresh).grid(
+                column=1,
+                row=0,
+                padx=(12, 6),
+            )
+            ttk.Button(footer, text="G-code kaydet", command=self.save_gcode).grid(
+                column=2,
+                row=0,
+            )
+
+            self.root.bind("<Control-s>", lambda _event: self.save_gcode())
+            self.root.bind("<Control-Return>", lambda _event: self.force_refresh())
+
+        def _add_hardware_entry(self, parent: ttk.Frame, key: str, row: int, column: int) -> None:
+            ttk.Label(parent, text=self.hardware_labels[key]).grid(
+                column=column,
+                row=row * 2,
+                sticky="w",
+                pady=(4 if row else 0, 0),
+                padx=(0, 8),
+            )
+            ttk.Entry(parent, textvariable=self.hardware_vars[key], width=10).grid(
+                column=column,
+                row=row * 2 + 1,
+                sticky="ew",
+                padx=(0, 8),
+                pady=(0, 4),
+            )
+            self.hardware_vars[key].trace_add("write", lambda *_: self.schedule_preview())
+
+        def choose_font(self) -> None:
+            if filedialog is None:
+                return
+            file_path = filedialog.askopenfilename(
+                title="TTF font seç",
+                filetypes=[("TrueType Font", "*.ttf"), ("Tüm dosyalar", "*.*")],
+            )
+            if file_path:
+                self.font_path_var.set(file_path)
+                self.status_var.set(f"Seçilen font: {Path(file_path).name}")
+                self.schedule_preview()
+
+        def add_block(self, initial_text: str = "") -> None:
+            uid = self.block_uid_counter
+            self.block_uid_counter += 1
+            block = _GUITextBlock(self, uid, initial_text)
+            bed_y = self._safe_float(self.hardware_vars["bed_y"], 235.0)
+            offset = 25.0 * len(self.blocks)
+            block.translation_x = 10.0
+            block.translation_y = max(10.0, bed_y - 40.0 - offset)
+            block.update_position_label()
+            block.frame.grid(column=0, row=len(self.blocks), sticky="ew", pady=(0, 12))
+            self.blocks.append(block)
+            self.update_block_headers()
+            self.schedule_preview()
+
+        def remove_block(self, block: _GUITextBlock) -> None:
+            if block in self.blocks:
+                self.blocks.remove(block)
+                block.destroy()
+                self.update_block_headers()
+                self.schedule_preview()
+
+        def update_block_headers(self) -> None:
+            for index, block in enumerate(self.blocks, start=1):
+                color = self.BLOCK_COLORS[(index - 1) % len(self.BLOCK_COLORS)]
+                block.set_display_index(index, color)
+                block.frame.grid_configure(row=index - 1)
+                block.update_position_label()
+
+        def _safe_float(self, var: tk.StringVar, fallback: float) -> float:
+            raw = var.get().strip().replace(",", ".")
+            if not raw:
+                return fallback
+            try:
+                return float(raw)
+            except ValueError:
+                return fallback
+
+        def schedule_preview(self) -> None:
+            if self._preview_pending:
+                return
+            self._preview_pending = True
+            self.root.after(75, self._run_scheduled_preview)
+
+        def _run_scheduled_preview(self) -> None:
+            self._preview_pending = False
+            self.refresh_preview()
+
+        def force_refresh(self) -> None:
+            self.refresh_preview(show_dialog=True)
+
+        def _parse_float(
+            self,
+            var: tk.StringVar,
+            label: str,
+            *,
+            default: float | None = None,
+            min_value: float | None = None,
+        ) -> float:
+            raw = var.get().strip()
+            if not raw and default is not None:
+                raw = str(default)
+                var.set(raw)
+            raw = raw.replace(",", ".")
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise ValueError(f"{label} için geçerli bir sayı girin.") from exc
+            if min_value is not None and value <= min_value:
+                if min_value == 0.0:
+                    raise ValueError(f"{label} 0'dan büyük olmalı.")
+                raise ValueError(f"{label} {min_value} değerinden büyük olmalı.")
+            return value
+
+        def refresh_preview(self, show_dialog: bool = False) -> None:
+            try:
+                font_path_str = self.font_path_var.get().strip()
+                if not font_path_str:
+                    raise ValueError("Lütfen bir .ttf font dosyası seçin.")
+                font_path = Path(font_path_str)
+
+                bed_x = self._parse_float(
+                    self.hardware_vars["bed_x"],
+                    self.hardware_labels["bed_x"],
+                    default=self.hardware_defaults_float["bed_x"],
+                    min_value=0.0,
+                )
+                bed_y = self._parse_float(
+                    self.hardware_vars["bed_y"],
+                    self.hardware_labels["bed_y"],
+                    default=self.hardware_defaults_float["bed_y"],
+                    min_value=0.0,
+                )
+                curve_tolerance = self._parse_float(
+                    self.curve_tolerance_var,
+                    "Eğri toleransı (mm)",
+                    default=0.1,
+                    min_value=0.0,
+                )
+                travel_feed = self._parse_float(
+                    self.hardware_vars["travel_feed"],
+                    self.hardware_labels["travel_feed"],
+                    default=self.hardware_defaults_float["travel_feed"],
+                    min_value=0.0,
+                )
+                drawing_feed = self._parse_float(
+                    self.hardware_vars["drawing_feed"],
+                    self.hardware_labels["drawing_feed"],
+                    default=self.hardware_defaults_float["drawing_feed"],
+                    min_value=0.0,
+                )
+                pen_up = self._parse_float(
+                    self.hardware_vars["pen_up"],
+                    self.hardware_labels["pen_up"],
+                    default=self.hardware_defaults_float["pen_up"],
+                )
+                pen_down = self._parse_float(
+                    self.hardware_vars["pen_down"],
+                    self.hardware_labels["pen_down"],
+                    default=self.hardware_defaults_float["pen_down"],
+                )
+                pen_offset_x = self._parse_float(
+                    self.hardware_vars["pen_offset_x"],
+                    self.hardware_labels["pen_offset_x"],
+                    default=self.hardware_defaults_float["pen_offset_x"],
+                )
+                pen_offset_y = self._parse_float(
+                    self.hardware_vars["pen_offset_y"],
+                    self.hardware_labels["pen_offset_y"],
+                    default=self.hardware_defaults_float["pen_offset_y"],
+                )
+
+                self.current_bed_size = (bed_x, bed_y)
+                self.preview_pen_offset = (pen_offset_x, pen_offset_y)
+
+                block_results: list[tuple[_GUITextBlock, List[PathType], tuple[float, float, float, float]]] = []
+                all_paths: List[PathType] = []
+                total_length = 0.0
+
+                with SimpleFontLoader(font_path) as font_loader:
+                    for block in self.blocks:
+                        text = block.text_widget.get("1.0", "end-1c")
+                        if not text.strip():
+                            block.local_bounds = None
+                            block.current_bounds = None
+                            continue
+                        font_size = self._parse_float(
+                            block.font_size_var,
+                            "Boyut (mm)",
+                            default=14.0,
+                            min_value=0.0,
+                        )
+                        line_spacing = self._parse_float(
+                            block.line_spacing_var,
+                            "Satır aralığı",
+                            default=1.3,
+                            min_value=0.0,
+                        )
+                        char_spacing = self._parse_float(
+                            block.char_spacing_var,
+                            "Harf boşluğu (mm)",
+                            default=0.0,
+                        )
+
+                        raw_paths = layout_text(
+                            text,
+                            font_loader,
+                            font_size=font_size,
+                            line_spacing=line_spacing,
+                            character_spacing=char_spacing,
+                            curve_tolerance=curve_tolerance,
+                        )
+                        raw_bounds = measure_paths(raw_paths)
+                        block.local_bounds = raw_bounds[:4]
+
+                        min_tx = -block.local_bounds[0] if block.local_bounds else block.translation_x
+                        max_tx = bed_x - block.local_bounds[2] if block.local_bounds else block.translation_x
+                        min_ty = -block.local_bounds[1] if block.local_bounds else block.translation_y
+                        max_ty = bed_y - block.local_bounds[3] if block.local_bounds else block.translation_y
+                        if block.local_bounds:
+                            if min_tx <= max_tx:
+                                block.translation_x = min(max(block.translation_x, min_tx), max_tx)
+                            if min_ty <= max_ty:
+                                block.translation_y = min(max(block.translation_y, min_ty), max_ty)
+
+                        translated_paths = translate_paths(
+                            raw_paths,
+                            block.translation_x,
+                            block.translation_y,
+                        )
+                        translated_bounds = measure_paths(translated_paths)
+                        if translated_bounds[4] == 0.0:
+                            block.current_bounds = None
+                            continue
+                        block.current_bounds = translated_bounds[:4]
+                        block.update_position_label()
+
+                        block_results.append((block, translated_paths, translated_bounds[:4]))
+                        all_paths.extend(translated_paths)
+                        total_length += translated_bounds[4]
+
+                if not all_paths:
+                    raise ValueError("En az bir metin bloğu dolu olmalıdır.")
+
+                combined_metrics = measure_paths(all_paths)
+                comment = f"Pen Plotter Studio - {font_path.name}"[:80]
+                settings = PlotterSettings(
+                    travel_height=pen_up,
+                    drawing_height=pen_down,
+                    travel_feed_rate=travel_feed,
+                    drawing_feed_rate=drawing_feed,
+                    comment=comment,
+                )
+
+                self.preview_paths = all_paths
+                self.preview_settings = settings
+                self.preview_metrics = combined_metrics
+
+                self._draw_preview(bed_x, bed_y, block_results)
+                width = combined_metrics[2] - combined_metrics[0]
+                height = combined_metrics[3] - combined_metrics[1]
+                self.metrics_var.set(
+                    "Genişlik: {:.2f} mm | Yükseklik: {:.2f} mm | Yol uzunluğu: {:.2f} mm".format(
+                        width,
+                        height,
+                        total_length,
+                    )
+                )
+                self.status_var.set("Önizleme güncellendi.")
+            except Exception as exc:
+                self.preview_paths = []
+                self.preview_settings = None
+                self.preview_metrics = None
+                self.block_bounds_mm.clear()
+                self.canvas.delete("all")
+                self.canvas.create_text(
+                    self.canvas_width / 2,
+                    self.canvas_height / 2,
+                    text=str(exc),
+                    fill="#b94a48",
+                )
+                self.metrics_var.set("Önizleme hazırlanamadı.")
+                self.status_var.set(f"Hata: {exc}")
+                if show_dialog and messagebox is not None:
+                    messagebox.showerror("Önizleme hatası", str(exc))
+
+        def _draw_preview(
+            self,
+            bed_x: float,
+            bed_y: float,
+            block_results: list[tuple[_GUITextBlock, List[PathType], tuple[float, float, float, float]]],
+        ) -> None:
+            canvas = self.canvas
             canvas.delete("all")
-            canvas.create_text(
-                CANVAS_WIDTH / 2,
-                CANVAS_HEIGHT / 2,
-                text=str(exc),
-                fill="#b94a48",
+            width = self.canvas_width
+            height = self.canvas_height
+
+            margin = 36.0
+            if bed_x <= 0 or bed_y <= 0:
+                canvas.create_text(
+                    width / 2,
+                    height / 2,
+                    text="Bed boyutlarını pozitif girin.",
+                    fill="#b94a48",
+                )
+                return
+
+            scale_x = (width - margin * 2) / bed_x if bed_x > 0 else 1.0
+            scale_y = (height - margin * 2) / bed_y if bed_y > 0 else 1.0
+            scale = max(min(scale_x, scale_y), 1e-3)
+            offset_x = (width - bed_x * scale) / 2.0
+            offset_y = (height - bed_y * scale) / 2.0
+            self.canvas_transform = (scale, offset_x, offset_y)
+
+            x0 = offset_x
+            x1 = offset_x + bed_x * scale
+            y0 = height - offset_y
+            y1 = height - (offset_y + bed_y * scale)
+
+            canvas.create_rectangle(x0, y1, x1, y0, outline="#8892a0", fill="#ffffff")
+
+            grid_step = 10.0
+            if bed_x > 0 and bed_y > 0:
+                num_x = int(bed_x // grid_step) + 1
+                num_y = int(bed_y // grid_step) + 1
+                for i in range(num_x + 1):
+                    x_mm = min(i * grid_step, bed_x)
+                    x = offset_x + x_mm * scale
+                    canvas.create_line(x, y0, x, y1, fill="#e2e6ef")
+                for j in range(num_y + 1):
+                    y_mm = min(j * grid_step, bed_y)
+                    y = height - (offset_y + y_mm * scale)
+                    canvas.create_line(x0, y, x1, y, fill="#e2e6ef")
+
+            self.block_bounds_mm.clear()
+            for block, paths, bounds in block_results:
+                color = block.color
+                for path in paths:
+                    if len(path) < 2:
+                        continue
+                    coords: list[float] = []
+                    for x_mm, y_mm in path:
+                        x = offset_x + x_mm * scale
+                        y = height - (offset_y + y_mm * scale)
+                        coords.extend((x, y))
+                    canvas.create_line(coords, fill=color, width=2)
+
+                min_x, min_y, max_x, max_y = bounds
+                x_left = offset_x + min_x * scale
+                x_right = offset_x + max_x * scale
+                y_top = height - (offset_y + max_y * scale)
+                y_bottom = height - (offset_y + min_y * scale)
+                canvas.create_rectangle(
+                    x_left,
+                    y_top,
+                    x_right,
+                    y_bottom,
+                    outline=color,
+                    dash=(4, 3),
+                )
+                canvas.create_text(
+                    x_left + 6,
+                    y_top + 14,
+                    text=block.header_var.get(),
+                    fill=color,
+                    anchor="w",
+                    font=("TkDefaultFont", 9, "bold"),
+                )
+                self.block_bounds_mm[block.uid] = bounds
+
+        def save_gcode(self) -> None:
+            if filedialog is None:
+                return
+            if not self.preview_paths or self.preview_settings is None:
+                self.force_refresh()
+                if not self.preview_paths or self.preview_settings is None:
+                    return
+            file_path = filedialog.asksaveasfilename(
+                title="G-code kaydet",
+                defaultextension=".gcode",
+                filetypes=[("G-code", "*.gcode"), ("Tüm dosyalar", "*.*")],
             )
-            metrics_var.set("Önizleme hazırlanamadı.")
-            status_var.set("Hata: {}".format(exc))
-            if show_dialog and messagebox is not None:
-                messagebox.showerror("Önizleme Hatası", str(exc))
-            return
-
-        state["paths"] = paths
-        state["settings"] = settings
-        state["metrics"] = metrics
-        draw_preview(paths, metrics)
-        status_var.set("Önizleme güncellendi.")
-
-    def save_gcode() -> None:
-        if filedialog is None:
-            return
-        if not state["paths"]:
-            refresh_preview(show_dialog=True)
-            if not state["paths"]:
+            if not file_path:
                 return
-        settings_obj = state["settings"]
-        if not isinstance(settings_obj, PlotterSettings):
-            refresh_preview(show_dialog=True)
-            settings_obj = state["settings"]
-            if not isinstance(settings_obj, PlotterSettings):
+            pen_offset_x, pen_offset_y = self.preview_pen_offset
+            paths_for_output = (
+                translate_paths(self.preview_paths, pen_offset_x, pen_offset_y)
+                if pen_offset_x or pen_offset_y
+                else list(self.preview_paths)
+            )
+            gcode_lines = paths_to_gcode(paths_for_output, self.preview_settings)
+            Path(file_path).write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
+            self.status_var.set(f"G-code kaydedildi: {file_path}")
+            if messagebox is not None:
+                messagebox.showinfo("G-code kaydedildi", f"Dosya '{file_path}' olarak kaydedildi.")
+
+        def _on_canvas_configure(self, event: tk.Event) -> None:
+            self.canvas_width = max(event.width, 200)
+            self.canvas_height = max(event.height, 200)
+            self.schedule_preview()
+
+        def _canvas_to_mm(self, x: float, y: float) -> tuple[float, float]:
+            scale, offset_x, offset_y = self.canvas_transform
+            if scale <= 0:
+                return 0.0, 0.0
+            mm_x = (x - offset_x) / scale
+            mm_y = ((self.canvas_height - y) - offset_y) / scale
+            return mm_x, mm_y
+
+        def _on_canvas_press(self, event: tk.Event) -> None:
+            if not self.block_bounds_mm:
                 return
-        file_path = filedialog.asksaveasfilename(
-            title="G-code kaydet",
-            defaultextension=".gcode",
-            filetypes=[("G-code", "*.gcode"), ("Tüm dosyalar", "*.*")],
-        )
-        if not file_path:
+            mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
+            for block in reversed(self.blocks):
+                bounds = self.block_bounds_mm.get(block.uid)
+                if bounds and bounds[0] <= mm_x <= bounds[2] and bounds[1] <= mm_y <= bounds[3]:
+                    self.drag_block = block
+                    self.drag_offset = (mm_x - block.translation_x, mm_y - block.translation_y)
+                    self.status_var.set(f"{block.header_var.get()} sürükleniyor...")
+                    break
+
+        def _on_canvas_drag(self, event: tk.Event) -> None:
+            block = self.drag_block
+            if block is None:
+                return
+            mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
+            new_tx = mm_x - self.drag_offset[0]
+            new_ty = mm_y - self.drag_offset[1]
+            bed_x, bed_y = self.current_bed_size
+            if block.local_bounds:
+                min_tx = -block.local_bounds[0]
+                max_tx = bed_x - block.local_bounds[2]
+                min_ty = -block.local_bounds[1]
+                max_ty = bed_y - block.local_bounds[3]
+                if min_tx <= max_tx:
+                    new_tx = min(max(new_tx, min_tx), max_tx)
+                if min_ty <= max_ty:
+                    new_ty = min(max(new_ty, min_ty), max_ty)
+            block.translation_x = new_tx
+            block.translation_y = new_ty
+            block.update_position_label()
+            self.schedule_preview()
+
+        def _on_canvas_release(self, _event: tk.Event) -> None:
+            if self.drag_block is not None:
+                self.status_var.set("Konum güncellendi.")
+            self.drag_block = None
+
+
+    def run_gui_mode() -> None:
+        """Tkinter tabanlı Pen Plotter Studio arayüzünü başlatır."""
+        if tk is None:
+            print("Bu sistemde Tkinter modülü bulunamadı. Komut satırı moduna geçiliyor.")
+            run_interactive_mode()
             return
-        gcode_lines = paths_to_gcode(state["paths"], settings_obj)
-        Path(file_path).write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
-        status_var.set(f"G-code kaydedildi: {file_path}")
-        if messagebox is not None:
-            messagebox.showinfo("G-code Kaydedildi", f"Dosya '{file_path}' olarak kaydedildi.")
 
-    button_frame = ttk.Frame(controls)
-    button_frame.grid(column=0, row=row_index + 1, sticky="ew", pady=(12, 0))
-    button_frame.columnconfigure(0, weight=1)
-    button_frame.columnconfigure(1, weight=1)
+        root = tk.Tk()
+        root.withdraw()
 
-    ttk.Button(
-        button_frame,
-        text="Önizlemeyi Güncelle",
-        command=lambda: refresh_preview(show_dialog=True),
-    ).grid(column=0, row=0, sticky="ew", padx=(0, 6))
+        try:
+            _ensure_fonttools_installed()
+        except ModuleNotFoundError:
+            error_message = (
+                "fonttools paketi bulunamadı. Komut satırında `pip install fonttools` "
+                "komutunu çalıştırıp tekrar deneyin."
+            )
+            if messagebox is not None:
+                messagebox.showerror("Bağımlılık Eksik", error_message)
+            else:
+                print(error_message)
+            root.destroy()
+            return
 
-    ttk.Button(
-        button_frame,
-        text="G-code Kaydet",
-        command=save_gcode,
-    ).grid(column=1, row=0, sticky="ew")
+        try:
+            style = ttk.Style()
+            if "clam" in style.theme_names():
+                style.theme_use("clam")
+        except Exception:
+            pass
 
-    status_label = ttk.Label(main, textvariable=status_var, anchor="w")
-    status_label.grid(column=0, row=2, columnspan=2, sticky="ew", pady=(12, 0))
-
-    # Hızlı klavye kısayolları
-    root.bind("<Control-s>", lambda _event: save_gcode())
-    root.bind("<Control-Return>", lambda _event: refresh_preview(show_dialog=True))
-
-    root.mainloop()
-
+        app = _PenPlotterStudio(root)
+        root.deiconify()
+        root.mainloop()
 
 def run_interactive_mode() -> None:
     print(
