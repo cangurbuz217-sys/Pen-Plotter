@@ -33,10 +33,26 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
     current_feed: float | None = None
     current_z = settings.travel_height
     pen_is_down = False
+    pen_up_requested = False
 
     for path in paths:
         if len(path) < 2:
             continue
+
+        if pen_up_requested or current_z != settings.travel_height:
+            gcode.append(
+                _format_z_move(
+                    "G0",
+                    settings.travel_height,
+                    settings.travel_feed_rate
+                    if current_feed != settings.travel_feed_rate
+                    else None,
+                )
+            )
+            current_feed = settings.travel_feed_rate
+            current_z = settings.travel_height
+            pen_is_down = False
+            pen_up_requested = False
 
         start = path[0]
         gcode.append(_format_move("G0", start, None))
@@ -66,20 +82,19 @@ def paths_to_gcode(paths: Iterable[Path], settings: PlotterSettings) -> List[str
             )
             current_feed = settings.drawing_feed_rate
 
+        pen_is_down = False
+        pen_up_requested = True
+        current_z = settings.drawing_height
+
+    if pen_up_requested or current_z != settings.travel_height:
         gcode.append(
             _format_z_move(
                 "G0",
                 settings.travel_height,
-                settings.travel_feed_rate
-                if current_feed != settings.travel_feed_rate
-                else None,
+                settings.travel_feed_rate if current_feed != settings.travel_feed_rate else None,
             )
         )
-        current_feed = settings.travel_feed_rate
-        current_z = settings.travel_height
-        pen_is_down = False
 
-    gcode.append(_format_z_move("G0", settings.travel_height, None))
     gcode.append("M2 ; Program end")
     return gcode
 

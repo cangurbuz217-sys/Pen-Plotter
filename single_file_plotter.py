@@ -16,10 +16,11 @@ Komut satırı tercih edenler için aynı dosya ``--help`` parametresiyle
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import Any, Iterable, List, Sequence, Tuple
 
 try:  # Tkinter her sistemde hazır olmayabilir
     import tkinter as tk
@@ -287,11 +288,27 @@ def paths_to_gcode(paths: Iterable[PathSequence], settings: PlotterSettings) -> 
     current_feed: float | None = None
     current_z = settings.travel_height
     pen_is_down = False
+    pen_up_requested = False
 
     for path in paths:
         path = list(path)
         if len(path) < 2:
             continue
+
+        if pen_up_requested or current_z != settings.travel_height:
+            gcode.append(
+                _format_z_move(
+                    "G0",
+                    settings.travel_height,
+                    settings.travel_feed_rate
+                    if current_feed != settings.travel_feed_rate
+                    else None,
+                )
+            )
+            current_feed = settings.travel_feed_rate
+            current_z = settings.travel_height
+            pen_is_down = False
+            pen_up_requested = False
 
         start = path[0]
         gcode.append(_format_move("G0", start, None))
@@ -323,6 +340,11 @@ def paths_to_gcode(paths: Iterable[PathSequence], settings: PlotterSettings) -> 
             )
             current_feed = settings.drawing_feed_rate
 
+        pen_is_down = False
+        pen_up_requested = True
+        current_z = settings.drawing_height
+
+    if pen_up_requested or current_z != settings.travel_height:
         gcode.append(
             _format_z_move(
                 "G0",
@@ -332,11 +354,7 @@ def paths_to_gcode(paths: Iterable[PathSequence], settings: PlotterSettings) -> 
                 else None,
             )
         )
-        current_feed = settings.travel_feed_rate
-        current_z = settings.travel_height
-        pen_is_down = False
 
-    gcode.append(_format_z_move("G0", settings.travel_height, None))
     gcode.append("M2 ; Program end")
     return gcode
 
@@ -723,6 +741,8 @@ if tk is not None:
             self.drag_offset = (0.0, 0.0)
             self._preview_pending = False
 
+            self.last_project_path: Path | None = None
+
             self.canvas_width = 640
             self.canvas_height = 540
 
@@ -840,6 +860,8 @@ if tk is not None:
             footer.columnconfigure(0, weight=1)
             footer.columnconfigure(1, weight=0)
             footer.columnconfigure(2, weight=0)
+            footer.columnconfigure(3, weight=0)
+            footer.columnconfigure(4, weight=0)
 
             ttk.Label(footer, textvariable=self.status_var, anchor="w").grid(
                 column=0,
@@ -851,12 +873,24 @@ if tk is not None:
                 row=0,
                 padx=(12, 6),
             )
-            ttk.Button(footer, text="G-code kaydet", command=self.save_gcode).grid(
+            ttk.Button(footer, text="Projeyi aç", command=self.load_project).grid(
                 column=2,
+                row=0,
+                padx=(0, 6),
+            )
+            ttk.Button(footer, text="Projeyi kaydet", command=self.save_project).grid(
+                column=3,
+                row=0,
+                padx=(0, 6),
+            )
+            ttk.Button(footer, text="G-code kaydet", command=self.save_gcode).grid(
+                column=4,
                 row=0,
             )
 
             self.root.bind("<Control-s>", lambda _event: self.save_gcode())
+            self.root.bind("<Control-Shift-s>", lambda _event: self.save_project())
+            self.root.bind("<Control-o>", lambda _event: self.load_project())
             self.root.bind("<Control-Return>", lambda _event: self.force_refresh())
 
         def _add_hardware_entry(self, parent: ttk.Frame, key: str, row: int, column: int) -> None:
@@ -1217,6 +1251,226 @@ if tk is not None:
                     font=("TkDefaultFont", 9, "bold"),
                 )
                 self.block_bounds_mm[block.uid] = bounds
+
+        def save_project(self) -> None:
+            if filedialog is None:
+                return
+            try:
+                project_state = self._collect_project_state()
+            except ValueError as exc:
+                self.status_var.set(f"Projeyi kaydedemedi: {exc}")
+                if messagebox is not None:
+                    messagebox.showerror("Kaydetme hatası", str(exc))
+                return
+
+            initialfile = (
+                self.last_project_path.name
+                if self.last_project_path is not None
+                else "pen_plotter_project.json"
+            )
+            file_path = filedialog.asksaveasfilename(
+                title="Projeyi kaydet",
+                defaultextension=".json",
+                filetypes=[("JSON", "*.json"), ("Tüm dosyalar", "*.*")],
+                initialfile=initialfile,
+            )
+            if not file_path:
+                return
+
+            try:
+                Path(file_path).write_text(
+                    json.dumps(project_state, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                self.status_var.set(f"Projeyi yazma hatası: {exc}")
+                if messagebox is not None:
+                    messagebox.showerror("Kaydetme hatası", str(exc))
+                return
+
+            self.last_project_path = Path(file_path)
+            self.status_var.set(f"Proje kaydedildi: {file_path}")
+            if messagebox is not None:
+                messagebox.showinfo("Projeyi kaydet", f"Ayarlar '{file_path}' dosyasına kaydedildi.")
+
+        def load_project(self) -> None:
+            if filedialog is None:
+                return
+            file_path = filedialog.askopenfilename(
+                title="Projeyi aç",
+                defaultextension=".json",
+                filetypes=[("JSON", "*.json"), ("Tüm dosyalar", "*.*")],
+            )
+            if not file_path:
+                return
+
+            try:
+                payload = Path(file_path).read_text(encoding="utf-8")
+                data = json.loads(payload)
+            except (OSError, json.JSONDecodeError) as exc:
+                self.status_var.set(f"Proje okunamadı: {exc}")
+                if messagebox is not None:
+                    messagebox.showerror("Yükleme hatası", str(exc))
+                return
+
+            try:
+                self._apply_project_state(data)
+            except ValueError as exc:
+                self.status_var.set(f"Proje yüklenemedi: {exc}")
+                if messagebox is not None:
+                    messagebox.showerror("Yükleme hatası", str(exc))
+                return
+
+            self.last_project_path = Path(file_path)
+            self.status_var.set(f"Proje yüklendi: {file_path}")
+            if messagebox is not None:
+                messagebox.showinfo("Projeyi aç", f"'{file_path}' dosyası yüklendi.")
+
+        def _collect_project_state(self) -> dict[str, Any]:
+            curve_tolerance = self._parse_float(
+                self.curve_tolerance_var,
+                "Eğri toleransı (mm)",
+                default=0.1,
+                min_value=0.0,
+            )
+
+            hardware: dict[str, float] = {}
+            for key in (
+                "bed_x",
+                "bed_y",
+                "pen_offset_x",
+                "pen_offset_y",
+                "pen_up",
+                "pen_down",
+                "travel_feed",
+                "drawing_feed",
+            ):
+                label = self.hardware_labels[key]
+                default = self.hardware_defaults_float.get(key)
+                min_value = 0.0 if key in {"bed_x", "bed_y", "travel_feed", "drawing_feed", "pen_up"} else None
+                hardware[key] = self._parse_float(
+                    self.hardware_vars[key],
+                    label,
+                    default=default,
+                    min_value=min_value,
+                )
+
+            blocks_state: list[dict[str, Any]] = []
+            for block in self.blocks:
+                text = block.text_widget.get("1.0", "end-1c")
+                font_size = self._parse_float(
+                    block.font_size_var,
+                    "Boyut (mm)",
+                    default=14.0,
+                    min_value=0.0,
+                )
+                line_spacing = self._parse_float(
+                    block.line_spacing_var,
+                    "Satır aralığı",
+                    default=1.3,
+                    min_value=0.0,
+                )
+                char_spacing = self._parse_float(
+                    block.char_spacing_var,
+                    "Harf boşluğu (mm)",
+                    default=0.0,
+                )
+                blocks_state.append(
+                    {
+                        "text": text,
+                        "font_size": font_size,
+                        "line_spacing": line_spacing,
+                        "character_spacing": char_spacing,
+                        "translation": [block.translation_x, block.translation_y],
+                    }
+                )
+
+            return {
+                "version": 1,
+                "font_path": self.font_path_var.get().strip(),
+                "curve_tolerance": curve_tolerance,
+                "hardware": hardware,
+                "blocks": blocks_state,
+            }
+
+        def _apply_project_state(self, data: dict[str, Any]) -> None:
+            if not isinstance(data, dict):
+                raise ValueError("Beklenmeyen proje formatı.")
+            version = data.get("version", 1)
+            if version != 1:
+                raise ValueError(f"Bu proje sürümü desteklenmiyor: {version}")
+
+            hardware = data.get("hardware")
+            if not isinstance(hardware, dict):
+                raise ValueError("Donanım ayarları bulunamadı.")
+
+            def fmt(value: float) -> str:
+                return ("{:.6f}".format(value)).rstrip("0").rstrip(".") or "0"
+
+            for key, var in self.hardware_vars.items():
+                raw_value = hardware.get(key)
+                if isinstance(raw_value, (int, float)):
+                    var.set(fmt(float(raw_value)))
+                elif isinstance(raw_value, str) and raw_value.strip():
+                    var.set(raw_value.strip())
+                else:
+                    var.set(self.hardware_defaults[key])
+
+            curve = data.get("curve_tolerance")
+            if isinstance(curve, (int, float)):
+                self.curve_tolerance_var.set(fmt(float(curve)))
+            elif isinstance(curve, str) and curve.strip():
+                self.curve_tolerance_var.set(curve.strip())
+
+            font_path = data.get("font_path")
+            if isinstance(font_path, str):
+                self.font_path_var.set(font_path)
+
+            blocks_payload = data.get("blocks")
+            for block in list(self.blocks):
+                block.destroy()
+            self.blocks.clear()
+            self.block_uid_counter = 1
+
+            previous_pending = self._preview_pending
+            self._preview_pending = True
+
+            if isinstance(blocks_payload, list) and blocks_payload:
+                for entry in blocks_payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    text = str(entry.get("text", ""))
+                    self.add_block(text)
+                    block = self.blocks[-1]
+                    font_size = entry.get("font_size")
+                    if isinstance(font_size, (int, float)):
+                        block.font_size_var.set(fmt(float(font_size)))
+                    elif isinstance(font_size, str):
+                        block.font_size_var.set(font_size)
+                    line_spacing = entry.get("line_spacing")
+                    if isinstance(line_spacing, (int, float)):
+                        block.line_spacing_var.set(fmt(float(line_spacing)))
+                    elif isinstance(line_spacing, str):
+                        block.line_spacing_var.set(line_spacing)
+                    char_spacing = entry.get("character_spacing")
+                    if isinstance(char_spacing, (int, float)):
+                        block.char_spacing_var.set(fmt(float(char_spacing)))
+                    elif isinstance(char_spacing, str):
+                        block.char_spacing_var.set(char_spacing)
+                    translation = entry.get("translation")
+                    if isinstance(translation, (list, tuple)) and len(translation) == 2:
+                        try:
+                            block.translation_x = float(translation[0])
+                            block.translation_y = float(translation[1])
+                        except (TypeError, ValueError):
+                            pass
+                    block.update_position_label()
+            else:
+                self.add_block()
+
+            self._preview_pending = previous_pending
+            self.update_block_headers()
+            self.schedule_preview()
 
         def save_gcode(self) -> None:
             if filedialog is None:
