@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
-from typing import List, Literal, Sequence, Tuple
+from typing import Dict, List, Literal, Sequence, Tuple
 
 from fontTools.misc import bezierTools
 from fontTools.pens.basePen import BasePen
@@ -37,26 +38,49 @@ class LayoutSettings:
     stroke_mode: Literal["outline", "centerline"] = "centerline"
 
 
+class _SharedFont:
+    """Container that keeps heavy font structures and glyph caches alive."""
+
+    def __init__(self, font_path: str) -> None:
+        self.font_path = font_path
+        self.font = TTFont(font_path)
+        self.glyph_set = self.font.getGlyphSet()
+        self.cmap = self.font.getBestCmap()
+        head_table = self.font["head"]
+        self.units_per_em = head_table.unitsPerEm
+        hhea = self.font["hhea"]
+        self.ascent = hhea.ascent
+        self.descent = hhea.descent
+        self.horizontal_metrics = self.font["hmtx"]
+        self.outline_cache: Dict[Tuple[str, float, float], GlyphPaths] = {}
+        self.centerline_cache: Dict[Tuple[str, float, float, float], List[Path]] = {}
+        self.lock = threading.RLock()
+
+
+_REGISTRY_LOCK = threading.RLock()
+_SHARED_FONTS: Dict[str, _SharedFont] = {}
+
+
 class FontLoader:
     """Loads glyph outlines from a TrueType font and converts them into polylines."""
 
     def __init__(self, font_path: str) -> None:
-        self._font = TTFont(font_path)
-        self._glyph_set = self._font.getGlyphSet()
-        self._cmap = self._font.getBestCmap()
-        head_table = self._font["head"]
-        self.units_per_em = head_table.unitsPerEm
-        hhea = self._font["hhea"]
-        self.ascent = hhea.ascent
-        self.descent = hhea.descent
-        self._horizontal_metrics = self._font["hmtx"]
-        self._outline_cache: dict[Tuple[str, float, float], GlyphPaths] = {}
-        self._centerline_cache: dict[
-            Tuple[str, float, float, float], List[Path]
-        ] = {}
+        self.font_path = font_path
+        with _REGISTRY_LOCK:
+            shared = _SHARED_FONTS.get(font_path)
+            if shared is None:
+                shared = _SharedFont(font_path)
+                _SHARED_FONTS[font_path] = shared
+            self._shared = shared
+        self.units_per_em = self._shared.units_per_em
+        self.ascent = self._shared.ascent
+        self.descent = self._shared.descent
 
-    def close(self) -> None:
-        self._font.close()
+    def close(self) -> None:  # pragma: no cover - maintained for context manager API
+        # We intentionally keep shared font objects alive to reuse caches across
+        # previews. The method exists so ``with FontLoader(...)`` blocks continue to
+        # work, but no further cleanup is required here.
+        return None
 
     def __enter__(self) -> "FontLoader":
         return self
@@ -66,7 +90,7 @@ class FontLoader:
 
     def glyph_name_for_character(self, character: str) -> str | None:
         code_point = ord(character)
-        return self._cmap.get(code_point)
+        return self._shared.cmap.get(code_point)
 
     def glyph_paths(
         self,
@@ -76,23 +100,24 @@ class FontLoader:
         curve_error_units: float,
     ) -> GlyphPaths:
         cache_key = (glyph_name, scale, curve_error_units)
-        cached = self._outline_cache.get(cache_key)
-        if cached is None:
-            glyph = self._glyph_set[glyph_name]
-            advance_width, _ = self._horizontal_metrics[glyph_name]
-            recording_pen = RecordingPen()
-            transform = (scale, 0.0, 0.0, scale, 0.0, 0.0)
-            polyline_pen = _PolylinePen(
-                glyph_set=self._glyph_set,
-                out_pen=TransformPen(recording_pen, transform),
-                tolerance=max(curve_error_units, 1e-3),
-            )
-            glyph.draw(polyline_pen)
-            cached = GlyphPaths(
-                advance_width=advance_width * scale,
-                paths=_recording_to_paths(recording_pen.value),
-            )
-            self._outline_cache[cache_key] = cached
+        with self._shared.lock:
+            cached = self._shared.outline_cache.get(cache_key)
+            if cached is None:
+                glyph = self._shared.glyph_set[glyph_name]
+                advance_width, _ = self._shared.horizontal_metrics[glyph_name]
+                recording_pen = RecordingPen()
+                transform = (scale, 0.0, 0.0, scale, 0.0, 0.0)
+                polyline_pen = _PolylinePen(
+                    glyph_set=self._shared.glyph_set,
+                    out_pen=TransformPen(recording_pen, transform),
+                    tolerance=max(curve_error_units, 1e-3),
+                )
+                glyph.draw(polyline_pen)
+                cached = GlyphPaths(
+                    advance_width=advance_width * scale,
+                    paths=_recording_to_paths(recording_pen.value),
+                )
+                self._shared.outline_cache[cache_key] = cached
 
         if offset == (0.0, 0.0):
             translated_paths = [list(path) for path in cached.paths]
@@ -112,9 +137,10 @@ class FontLoader:
         tolerance_mm: float,
     ) -> List[Path]:
         cache_key = (glyph_name, scale, curve_error_units, tolerance_mm)
-        cached = self._centerline_cache.get(cache_key)
-        if cached is not None:
-            return [list(path) for path in cached]
+        with self._shared.lock:
+            cached = self._shared.centerline_cache.get(cache_key)
+            if cached is not None:
+                return [list(path) for path in cached]
 
         outline = self.glyph_paths(
             glyph_name,
@@ -123,7 +149,8 @@ class FontLoader:
             curve_error_units=curve_error_units,
         )
         centerlines = outlines_to_centerlines(outline.paths, tolerance_mm)
-        self._centerline_cache[cache_key] = [list(path) for path in centerlines]
+        with self._shared.lock:
+            self._shared.centerline_cache[cache_key] = [list(path) for path in centerlines]
         return centerlines
 
 

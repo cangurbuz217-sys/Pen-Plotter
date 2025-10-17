@@ -507,6 +507,7 @@ else:
             self._active_preview_id = job_id
             self.warning_var.set("")
             self.status_var.set("Önizleme hazırlanıyor...")
+            self._show_loading_canvas()
             thread = threading.Thread(
                 target=self._preview_worker,
                 args=(job_id, inputs, dialog_flag),
@@ -799,6 +800,24 @@ else:
             self.warning_var.set("")
             if show_dialog and messagebox is not None:
                 messagebox.showerror("Önizleme hatası", str(exc))
+
+        def _show_loading_canvas(self) -> None:
+            self.canvas.delete("all")
+            self.canvas.create_rectangle(
+                0,
+                0,
+                self.canvas_width,
+                self.canvas_height,
+                fill=self.CANVAS_BG,
+                outline="",
+            )
+            self.canvas.create_text(
+                self.canvas_width / 2,
+                self.canvas_height / 2,
+                text="Önizleme hazırlanıyor...",
+                fill="#4a5568",
+                font=("TkDefaultFont", 11, "bold"),
+            )
 
         def _draw_preview(
             self,
