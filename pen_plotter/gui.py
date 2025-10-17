@@ -181,6 +181,7 @@ else:
 
             self.status_var = tk.StringVar(value="Hazır")
             self.metrics_var = tk.StringVar(value="Önizleme bekleniyor.")
+            self.warning_var = tk.StringVar(value="")
 
             self.blocks: List[_GUITextBlock] = []
             self.block_uid_counter = 1
@@ -259,27 +260,6 @@ else:
                 pady=(0, 8),
             )
 
-            control_buttons = ttk.Frame(hardware_frame)
-            control_buttons.grid(
-                column=0,
-                row=tolerance_row + 2,
-                columnspan=2,
-                sticky="ew",
-                pady=(0, 0),
-            )
-            control_buttons.columnconfigure(0, weight=1)
-            control_buttons.columnconfigure(1, weight=1)
-
-            ttk.Button(
-                control_buttons,
-                text="Kalemi yukarı",
-                command=self.show_pen_up_command,
-            ).grid(column=0, row=0, sticky="ew", padx=(0, 6))
-            ttk.Button(
-                control_buttons,
-                text="Kalemi aşağı",
-                command=self.show_pen_down_command,
-            ).grid(column=1, row=0, sticky="ew")
             self.curve_tolerance_var.trace_add("write", lambda *_: self.schedule_preview())
 
             font_frame = ttk.LabelFrame(controls, text="Your text")
@@ -318,14 +298,23 @@ else:
             preview_frame = ttk.Frame(main)
             preview_frame.grid(column=1, row=0, sticky="nsew")
             preview_frame.columnconfigure(0, weight=1)
-            preview_frame.rowconfigure(0, weight=1)
+            preview_frame.rowconfigure(1, weight=1)
+
+            ttk.Label(
+                preview_frame,
+                textvariable=self.warning_var,
+                foreground="#d9534f",
+                anchor="center",
+                justify="center",
+                font=("TkDefaultFont", 10, "bold"),
+            ).grid(column=0, row=0, sticky="ew", pady=(0, 4))
 
             self.canvas = tk.Canvas(
                 preview_frame,
                 background=self.CANVAS_BG,
                 highlightthickness=0,
             )
-            self.canvas.grid(column=0, row=0, sticky="nsew")
+            self.canvas.grid(column=0, row=1, sticky="nsew")
             self.canvas.bind("<Configure>", self._on_canvas_configure)
             self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
             self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
@@ -333,7 +322,7 @@ else:
 
             ttk.Label(preview_frame, textvariable=self.metrics_var, anchor="center").grid(
                 column=0,
-                row=1,
+                row=2,
                 sticky="ew",
                 pady=(12, 0),
             )
@@ -387,59 +376,6 @@ else:
             entry = ttk.Entry(parent, textvariable=self.hardware_vars[key], width=10)
             entry.grid(column=column, row=row * 2 + 1, sticky="ew", padx=(0, 8), pady=(0, 4))
             entry.bind("<KeyRelease>", lambda _event: self.schedule_preview())
-
-        def show_pen_up_command(self) -> None:
-            self._show_pen_move(
-                height_key="pen_up",
-                feed_key="travel_feed",
-                command="G0",
-                label="Kalem yukarı",
-            )
-
-        def show_pen_down_command(self) -> None:
-            self._show_pen_move(
-                height_key="pen_down",
-                feed_key="travel_feed",
-                command="G1",
-                label="Kalem aşağı",
-            )
-
-        def _show_pen_move(
-            self,
-            *,
-            height_key: str,
-            feed_key: str,
-            command: str,
-            label: str,
-        ) -> None:
-            try:
-                height = self._parse_float(
-                    self.hardware_vars[height_key],
-                    self.hardware_labels[height_key],
-                    default=self.hardware_defaults_float[height_key],
-                )
-                feed_rate = self._parse_float(
-                    self.hardware_vars[feed_key],
-                    self.hardware_labels[feed_key],
-                    default=self.hardware_defaults_float[feed_key],
-                    min_value=0.0,
-                )
-            except ValueError as exc:
-                self.status_var.set(f"Hata: {exc}")
-                if messagebox is not None:
-                    messagebox.showerror("Değer hatası", str(exc))
-                return
-
-            feed_mm_min = feed_rate * 60.0
-            command_str = f"{command} Z{height:.3f} F{feed_mm_min:.2f}"
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(command_str)
-                clipboard_note = " (panoya kopyalandı)"
-            except tk.TclError:
-                clipboard_note = ""
-
-            self.status_var.set(f"{label} komutu: {command_str}{clipboard_note}")
 
         # ---------------------------------------------------------- Block mgmt --
         def add_block(self, initial_text: str = "") -> None:
@@ -497,6 +433,7 @@ else:
                 self.status_var.set("Lütfen önce bir TTF font seçin.")
                 self.canvas.delete("all")
                 self.metrics_var.set("Önizleme için font seçin.")
+                self.warning_var.set("")
                 return
 
             try:
@@ -552,9 +489,12 @@ else:
                 self.current_bed_size = (bed_x, bed_y)
                 self.preview_pen_offset = (pen_offset_x, pen_offset_y)
 
-                block_results: List[Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float]]] = []
+                block_results: List[
+                    Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
+                ] = []
                 all_paths: List[PathType] = []
                 total_length = 0.0
+                outside_blocks: List[_GUITextBlock] = []
 
                 with FontLoader(font_path_str) as font_loader:
                     for block in self.blocks:
@@ -591,20 +531,6 @@ else:
                         raw_bounds = measure_paths(raw_paths)
                         block.local_bounds = raw_bounds[:4]
 
-                        if block.local_bounds:
-                            min_tx = -block.local_bounds[0]
-                            max_tx = bed_x - block.local_bounds[2]
-                            min_ty = -block.local_bounds[1]
-                            max_ty = bed_y - block.local_bounds[3]
-                            if min_tx <= max_tx:
-                                block.translation_x = min(
-                                    max(block.translation_x, min_tx), max_tx
-                                )
-                            if min_ty <= max_ty:
-                                block.translation_y = min(
-                                    max(block.translation_y, min_ty), max_ty
-                                )
-
                         translated_paths = translate_paths(
                             raw_paths,
                             block.translation_x,
@@ -614,10 +540,20 @@ else:
                         if translated_bounds[4] == 0.0:
                             block.current_bounds = None
                             continue
-                        block.current_bounds = translated_bounds[:4]
+                        bounds_rect = translated_bounds[:4]
+                        block.current_bounds = bounds_rect
                         block.update_position_label()
 
-                        block_results.append((block, translated_paths, translated_bounds[:4]))
+                        outside = (
+                            bounds_rect[0] < -1e-3
+                            or bounds_rect[1] < -1e-3
+                            or bounds_rect[2] > bed_x + 1e-3
+                            or bounds_rect[3] > bed_y + 1e-3
+                        )
+                        if outside:
+                            outside_blocks.append(block)
+
+                        block_results.append((block, translated_paths, bounds_rect, outside))
                         all_paths.extend(translated_paths)
                         total_length += translated_bounds[4]
 
@@ -648,7 +584,21 @@ else:
                         total_length,
                     )
                 )
-                self.status_var.set("Önizleme güncellendi.")
+                if outside_blocks:
+                    block_names = ", ".join(block.header_var.get() for block in outside_blocks)
+                    if len(outside_blocks) == 1:
+                        warning_text = (
+                            f"Uyarı: {block_names} çalışma alanının dışında."
+                        )
+                    else:
+                        warning_text = (
+                            f"Uyarı: Metin blokları çalışma alanının dışında: {block_names}"
+                        )
+                    self.warning_var.set(warning_text)
+                    self.status_var.set(warning_text)
+                else:
+                    self.warning_var.set("")
+                    self.status_var.set("Önizleme güncellendi.")
             except Exception as exc:
                 self.preview_paths = []
                 self.preview_settings = None
@@ -663,6 +613,7 @@ else:
                 )
                 self.metrics_var.set("Önizleme hazırlanamadı.")
                 self.status_var.set(f"Hata: {exc}")
+                self.warning_var.set("")
                 if show_dialog and messagebox is not None:
                     messagebox.showerror("Önizleme hatası", str(exc))
 
@@ -670,7 +621,9 @@ else:
             self,
             bed_x: float,
             bed_y: float,
-            block_results: List[Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float]]],
+            block_results: List[
+                Tuple[_GUITextBlock, List[PathType], Tuple[float, float, float, float], bool]
+            ],
         ) -> None:
             canvas = self.canvas
             canvas.delete("all")
@@ -714,8 +667,16 @@ else:
                     y = height - (offset_y + y_mm * scale)
                     canvas.create_line(x0, y, x1, y, fill="#e2e6ef")
 
+            pen_offset_x, pen_offset_y = self.preview_pen_offset
+            if 0.0 <= pen_offset_x <= bed_x:
+                x_line = offset_x + pen_offset_x * scale
+                canvas.create_line(x_line, y0, x_line, y1, fill="#f4a259", dash=(4, 4))
+            if 0.0 <= pen_offset_y <= bed_y:
+                y_line = height - (offset_y + pen_offset_y * scale)
+                canvas.create_line(x0, y_line, x1, y_line, fill="#f4a259", dash=(4, 4))
+
             self.block_bounds_mm.clear()
-            for block, paths, bounds in block_results:
+            for block, paths, bounds, outside in block_results:
                 path_color = "#000000"
                 for path in paths:
                     if len(path) < 2:
@@ -732,19 +693,22 @@ else:
                 x_right = offset_x + max_x * scale
                 y_top = height - (offset_y + max_y * scale)
                 y_bottom = height - (offset_y + min_y * scale)
+                outline_color = "#d9534f" if outside else block.color
+                dash_pattern = (6, 3) if outside else (4, 3)
                 canvas.create_rectangle(
                     x_left,
                     y_top,
                     x_right,
                     y_bottom,
-                    outline=block.color,
-                    dash=(4, 3),
+                    outline=outline_color,
+                    dash=dash_pattern,
+                    width=2 if outside else 1,
                 )
                 canvas.create_text(
                     x_left + 6,
                     y_top + 14,
                     text=block.header_var.get(),
-                    fill=block.color,
+                    fill=outline_color,
                     anchor="w",
                     font=("TkDefaultFont", 9, "bold"),
                 )
@@ -946,16 +910,6 @@ else:
             mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
             new_tx = mm_x - self.drag_offset[0]
             new_ty = mm_y - self.drag_offset[1]
-            bed_x, bed_y = self.current_bed_size
-            if block.local_bounds:
-                min_tx = -block.local_bounds[0]
-                max_tx = bed_x - block.local_bounds[2]
-                min_ty = -block.local_bounds[1]
-                max_ty = bed_y - block.local_bounds[3]
-                if min_tx <= max_tx:
-                    new_tx = min(max(new_tx, min_tx), max_tx)
-                if min_ty <= max_ty:
-                    new_ty = min(max(new_ty, min_ty), max_ty)
             block.translation_x = new_tx
             block.translation_y = new_ty
             block.update_position_label()
