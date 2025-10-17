@@ -6,7 +6,7 @@ Bu depo, TrueType fontları kullanarak istediğiniz metni 3B yazıcı veya pen p
 
 - Yeni **Pen Plotter Studio** masaüstü arayüzü; yatak boyutunu, pen ofsetlerini ve pen yukarı/aşağı yüksekliklerini belirleyip canlı önizleme ile sınırlar içinde çalışmanızı sağlar.
 - Her metin bloğunun kendi font boyutu, satır aralığı, harf aralığı ve konumu bulunur; blokları sürükleyip bırakabilir ve aynı projede farklı kombinasyonlar kullanabilirsiniz.
-- `.ttf` veya `.otf` fontlarını yükleyerek konturları tek çizgilik merkez hattına dönüştürür; böylece kalem tek bir stroke ile harfleri yazar.
+- `.ttf` veya `.otf` fontlarını yükleyerek konturları tek çizgilik merkez hattına dönüştürür; scikit-image tabanlı medial-axis + OpenCV inceltme kombinasyonu sayesinde çizgiler daha düzgün ve kesintisizdir.
 - Boşta ve çizim hızlarını mm/s cinsinden girip G-code üretimi sırasında otomatik olarak mm/dakikaya dönüştürür.
 - Proje ayarlarını JSON olarak kaydedip daha sonra tekrar yükleyebilir, G-code çıktısını tek tuşla kaydedebilirsiniz.
 - Konturlar oluşturulmadan önce tahmini boyut ve çizim uzunluğu için ön izleme sağlar.
@@ -62,7 +62,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
    .\pen-plotter-gui\Scripts\Activate.ps1
    ```
 
-6. Gerekli paketleri yükleyin:
+6. Gerekli paketleri yükleyin (OpenCV, scikit-image ve bağımlılıkları birkaç dakika sürebilir):
 
    ```powershell
    pip install -r requirements.txt
@@ -109,7 +109,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 Modül yapısı:
 
 - `pen_plotter/font_paths.py`: Font konturlarını çoklu çizgi (polyline) yollarına çevirir.
-- `pen_plotter/centerline.py`: Kontur dolgusunu inceleyerek tek stroke merkez hatlarını üretir.
+- `pen_plotter/centerline.py`: Kontur dolgusunu inceleyerek tek stroke merkez hatlarını üretir (scikit-image medial axis + OpenCV inceltme).
 - `pen_plotter/gcode.py`: Çoklu çizgi yollarını pen plotter dostu G-code komutlarına dönüştürür.
 - `pen_plotter/cli.py`: Komut satırı arabirimi.
 
