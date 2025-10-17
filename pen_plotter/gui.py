@@ -278,6 +278,7 @@ else:
     class _ShapePreviewData:
         uid: int
         shape_type: str
+        params: Dict[str, float]
         paths: List[PathType]
         bounds: Tuple[float, float, float, float]
         local_bounds: Tuple[float, float, float, float]
@@ -375,7 +376,13 @@ else:
             self.item_bounds_mm: Dict[object, Tuple[float, float, float, float]] = {}
             self.item_centers_mm: Dict[object, Tuple[float, float]] = {}
             self.item_handles_mm: Dict[object, Tuple[float, float]] = {}
+            self.item_resize_handles_mm: Dict[
+                object, List[Tuple[str, Tuple[float, float]]]
+            ] = {}
             self.render_stack: List[object] = []
+            self._last_render_items: List[
+                Tuple[object, List[PathType], Tuple[float, float, float, float], bool]
+            ] = []
             self.preview_paths: List[PathType] = []
             self.preview_settings: Optional[PlotterSettings] = None
             self.preview_metrics: Optional[Tuple[float, float, float, float, float]] = None
@@ -390,6 +397,12 @@ else:
             self.rotate_item: Optional[object] = None
             self.rotate_reference_angle = 0.0
             self.rotate_center = (0.0, 0.0)
+            self.resize_item: Optional[object] = None
+            self.resize_handle: Optional[str] = None
+            self.selected_item: Optional[object] = None
+            self.resize_handle_positions: Dict[
+                Tuple[object, str], Tuple[float, float, float]
+            ] = {}
             self._preview_pending = False
             self._preview_timer: Optional[str] = None
             self._preview_thread_running = False
@@ -987,6 +1000,7 @@ else:
                         _ShapePreviewData(
                             uid=shape_request.uid,
                             shape_type=shape_request.shape_type,
+                            params=shape_request.params,
                             paths=transformed_paths,
                             bounds=bounds_rect,
                             local_bounds=local_bounds,
@@ -1050,6 +1064,7 @@ else:
             self.item_bounds_mm.clear()
             self.item_centers_mm.clear()
             self.item_handles_mm.clear()
+            self.item_resize_handles_mm.clear()
             render_items: List[
                 Tuple[object, List[PathType], Tuple[float, float, float, float], bool]
             ] = []
@@ -1082,6 +1097,7 @@ else:
                     self.item_bounds_mm.pop(block, None)
                     self.item_centers_mm.pop(block, None)
                     self.item_handles_mm.pop(block, None)
+                    self.item_resize_handles_mm.pop(block, None)
 
             shape_map = {shape.uid: shape for shape in self.shapes}
             seen_shapes: set[int] = set()
@@ -1096,6 +1112,9 @@ else:
                 self.item_bounds_mm[shape] = shape_data.bounds
                 self.item_centers_mm[shape] = shape_data.center
                 self.item_handles_mm[shape] = shape_data.handle_point
+                self.item_resize_handles_mm[shape] = self._compute_shape_resize_handles(
+                    shape_data
+                )
                 render_items.append(
                     (shape, shape_data.paths, shape_data.bounds, shape_data.outside)
                 )
@@ -1108,8 +1127,12 @@ else:
                     self.item_bounds_mm.pop(shape, None)
                     self.item_centers_mm.pop(shape, None)
                     self.item_handles_mm.pop(shape, None)
+                    self.item_resize_handles_mm.pop(shape, None)
 
             self.render_stack = [item for item, _, _, _ in render_items]
+            self._last_render_items = render_items
+            if self.selected_item not in self.render_stack:
+                self.selected_item = None
 
             self._draw_preview(inputs.bed_x, inputs.bed_y, render_items)
             width = data.metrics[2] - data.metrics[0]
@@ -1155,7 +1178,10 @@ else:
             self.item_bounds_mm.clear()
             self.item_centers_mm.clear()
             self.item_handles_mm.clear()
+            self.item_resize_handles_mm.clear()
+            self._last_render_items = []
             self.render_stack.clear()
+            self.resize_handle_positions = {}
             self.canvas.delete("all")
             self.canvas.create_text(
                 self.canvas_width / 2,
@@ -1179,6 +1205,7 @@ else:
                 fill=self.CANVAS_BG,
                 outline="",
             )
+            self.resize_handle_positions = {}
             self.canvas.create_text(
                 self.canvas_width / 2,
                 self.canvas_height / 2,
@@ -1223,6 +1250,7 @@ else:
             y1 = height - (offset_y + bed_y * scale)
 
             canvas.create_rectangle(0, 0, width, height, fill=self.CANVAS_BG, outline="")
+            self.resize_handle_positions = {}
 
             shade_color = "#d9deeb"
             canvas.create_rectangle(0, 0, width, y1, fill=shade_color, outline="")
@@ -1352,6 +1380,26 @@ else:
                         fill="#ffffff",
                         width=2,
                     )
+
+                if item is self.selected_item and item in self.item_resize_handles_mm:
+                    for handle_name, point_mm in self.item_resize_handles_mm[item]:
+                        hx = offset_x + point_mm[0] * scale
+                        hy = height - (offset_y + point_mm[1] * scale)
+                        size = 5
+                        canvas.create_rectangle(
+                            hx - size,
+                            hy - size,
+                            hx + size,
+                            hy + size,
+                            outline=outline_color,
+                            fill="#ffffff",
+                            width=2,
+                        )
+                        self.resize_handle_positions[(item, handle_name)] = (
+                            hx,
+                            hy,
+                            size + 3,
+                        )
 
         def save_project(self) -> None:
             if filedialog is None:
@@ -1588,6 +1636,20 @@ else:
         def _on_canvas_press(self, event: tk.Event) -> None:
             if not self.item_bounds_mm:
                 return
+            for (item, handle_name), (hx, hy, radius) in self.resize_handle_positions.items():
+                if (event.x - hx) ** 2 + (event.y - hy) ** 2 <= radius**2 and isinstance(
+                    item, _GUIShape
+                ):
+                    self.resize_item = item
+                    self.resize_handle = handle_name
+                    self.rotate_item = None
+                    self.drag_item = None
+                    self.selected_item = item
+                    header_var = getattr(item, "header_var", None)
+                    label_text = header_var.get() if header_var is not None else "Öğe"
+                    self.status_var.set(f"{label_text} yeniden boyutlandırılıyor...")
+                    return
+
             mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
 
             for item in reversed(self.render_stack):
@@ -1602,9 +1664,13 @@ else:
                         current_rotation = getattr(item, "rotation_deg", 0.0)
                         self.rotate_reference_angle = base_angle - current_rotation
                         self.rotate_center = center
+                        self.resize_item = None
+                        self.drag_item = None
                         header_var = getattr(item, "header_var", None)
                         label_text = header_var.get() if header_var is not None else "Öğe"
                         self.status_var.set(f"{label_text} döndürülüyor...")
+                        self.selected_item = item
+                        self._redraw_cached_preview()
                         return
 
             for item in reversed(self.render_stack):
@@ -1618,13 +1684,25 @@ else:
                     tx = getattr(item, "translation_x", 0.0)
                     ty = getattr(item, "translation_y", 0.0)
                     self.drag_offset = (mm_x - tx, mm_y - ty)
+                    self.resize_item = None
+                    self.rotate_item = None
                     header_var = getattr(item, "header_var", None)
                     label_text = header_var.get() if header_var is not None else "Öğe"
                     self.status_var.set(f"{label_text} sürükleniyor...")
+                    self.selected_item = item
+                    self._redraw_cached_preview()
                     return
+
+            self.status_var.set("Tuval")
+            if self.selected_item is not None:
+                self.selected_item = None
+                self._redraw_cached_preview()
 
         def _on_canvas_drag(self, event: tk.Event) -> None:
             mm_x, mm_y = self._canvas_to_mm(event.x, event.y)
+            if self.resize_item is not None and isinstance(self.resize_item, _GUIShape):
+                self._handle_resize_drag(self.resize_item, self.resize_handle, mm_x, mm_y)
+                return
             if self.rotate_item is not None:
                 center_x, center_y = self.rotate_center
                 vx = mm_x - center_x
@@ -1658,14 +1736,52 @@ else:
                 header_var = getattr(self.rotate_item, "header_var", None)
                 label_text = header_var.get() if header_var is not None else "Öğe"
                 self.status_var.set(f"{label_text} rotasyonu güncellendi.")
+            elif self.resize_item is not None:
+                header_var = getattr(self.resize_item, "header_var", None)
+                label_text = header_var.get() if header_var is not None else "Öğe"
+                self.status_var.set(f"{label_text} boyutu güncellendi.")
             elif self.drag_item is not None:
                 header_var = getattr(self.drag_item, "header_var", None)
                 label_text = header_var.get() if header_var is not None else "Öğe"
                 self.status_var.set(f"{label_text} konumu güncellendi.")
             self.drag_item = None
             self.rotate_item = None
+            self.resize_item = None
+            self.resize_handle = None
 
         # ------------------------------------------------------------ Helpers --
+        def _compute_shape_resize_handles(
+            self, shape_data: _ShapePreviewData
+        ) -> List[Tuple[str, Tuple[float, float]]]:
+            handles: List[Tuple[str, Tuple[float, float]]] = []
+            params = shape_data.params
+            angle_rad = math.radians(shape_data.rotation)
+            cos_a = math.cos(angle_rad)
+            sin_a = math.sin(angle_rad)
+            cx, cy = shape_data.center
+
+            def transform(local_x: float, local_y: float) -> Tuple[float, float]:
+                rx = cx + local_x * cos_a - local_y * sin_a
+                ry = cy + local_x * sin_a + local_y * cos_a
+                return (rx, ry)
+
+            if shape_data.shape_type == "rectangle":
+                half_w = max(params.get("width", 0.0), 0.0) * 0.5
+                half_h = max(params.get("height", 0.0), 0.0) * 0.5
+                corners = {
+                    "corner_nw": (-half_w, half_h),
+                    "corner_ne": (half_w, half_h),
+                    "corner_sw": (-half_w, -half_h),
+                    "corner_se": (half_w, -half_h),
+                }
+                for key, (lx, ly) in corners.items():
+                    handles.append((key, transform(lx, ly)))
+            elif shape_data.shape_type in {"line", "arrow"}:
+                half_len = max(params.get("length", 0.0), 0.0) * 0.5
+                handles.append(("start", transform(-half_len, 0.0)))
+                handles.append(("end", transform(half_len, 0.0)))
+            return handles
+
         def _shape_paths(
             self, request: _ShapeRequest
         ) -> Tuple[List[PathType], Tuple[float, float, float, float]]:
@@ -1738,6 +1854,53 @@ else:
 
         def _fmt(self, value: float) -> str:
             return f"{value:.3f}".rstrip("0").rstrip(".")
+
+        def _redraw_cached_preview(self) -> None:
+            if not self._last_render_items:
+                return
+            self._draw_preview(
+                self.current_bed_size[0],
+                self.current_bed_size[1],
+                self._last_render_items,
+            )
+
+        def _handle_resize_drag(
+            self,
+            shape: _GUIShape,
+            handle_name: Optional[str],
+            mm_x: float,
+            mm_y: float,
+        ) -> None:
+            if handle_name is None:
+                return
+            params = shape.param_vars
+            rotation = getattr(shape, "rotation_deg", 0.0)
+            tx = getattr(shape, "translation_x", 0.0)
+            ty = getattr(shape, "translation_y", 0.0)
+            angle = math.radians(-rotation)
+            dx = mm_x - tx
+            dy = mm_y - ty
+            local_x = dx * math.cos(angle) - dy * math.sin(angle)
+            local_y = dx * math.sin(angle) + dy * math.cos(angle)
+
+            if shape.shape_type == "rectangle":
+                half_w = max(abs(local_x), 1.0)
+                half_h = max(abs(local_y), 1.0)
+                width = half_w * 2.0
+                height = half_h * 2.0
+                params["width"].set(self._fmt(width))
+                params["height"].set(self._fmt(height))
+                shape.param_defaults["width"] = width
+                shape.param_defaults["height"] = height
+            elif shape.shape_type in {"line", "arrow"}:
+                half_len = max(abs(local_x), 1.0)
+                length = half_len * 2.0
+                params["length"].set(self._fmt(length))
+                shape.param_defaults["length"] = length
+            else:
+                return
+
+            self.schedule_preview()
 
         def _collect_project_state(self) -> dict:
             if not self.blocks and not self.shapes:
