@@ -109,7 +109,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 Modül yapısı:
 
 - `pen_plotter/font_paths.py`: Font konturlarını çoklu çizgi (polyline) yollarına çevirir.
-- `pen_plotter/centerline.py`: Kontur dolgusunu inceleyerek tek stroke merkez hatlarını üretir (scikit-image medial axis + OpenCV inceltme).
+- `pen_plotter/centerline.py`: Kontur dolgusunu inceleyerek tek stroke merkez hatlarını üretir (scikit-image medial axis + OpenCV inceltme) ve yolları düzgün tek çizgilere indirgemek için ek yumuşatma/adımlama uygular.
 - `pen_plotter/gcode.py`: Çoklu çizgi yollarını pen plotter dostu G-code komutlarına dönüştürür.
 - `pen_plotter/cli.py`: Komut satırı arabirimi.
 
