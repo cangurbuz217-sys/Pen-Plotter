@@ -4,12 +4,12 @@ Bu depo, TrueType fontları kullanarak istediğiniz metni 3B yazıcı veya pen p
 
 ## Özellikler
 
-- Yeni **Pen Plotter Studio** masaüstü arayüzü; yazınızı küçük bir koordinat sisteminde anında önizleme imkânı sunar.
-- Herhangi bir TTF fontundan bezier konturlarını çizgi segmentlerine dönüştürür.
-- Metni satırlara böler, satır ve karakter aralıklarını ayarlamanıza izin verir.
-- Çıkışı belirlediğiniz koordinatlara taşır veya otomatik olarak merkezler.
-- Seyahat/drawing hızları ve pen yüksekliği dahil olmak üzere G-code parametrelerini özelleştirin.
-- Konturlar oluşturulmadan önce tahmini boyut ve çizim uzunluğu için ön izleme.
+- Yeni **Pen Plotter Studio** masaüstü arayüzü; yatak boyutunu, pen ofsetlerini ve pen yukarı/aşağı yüksekliklerini belirleyip canlı önizleme ile sınırlar içinde çalışmanızı sağlar.
+- Her metin bloğunun kendi font boyutu, satır aralığı, harf aralığı ve konumu bulunur; blokları sürükleyip bırakabilir ve aynı projede farklı kombinasyonlar kullanabilirsiniz.
+- `.ttf` veya `.otf` fontlarını yükleyerek Bézier konturlarını otomatik olarak çizgi segmentlerine çevirir.
+- Boşta ve çizim hızlarını mm/s cinsinden girip G-code üretimi sırasında otomatik olarak mm/dakikaya dönüştürür.
+- Proje ayarlarını JSON olarak kaydedip daha sonra tekrar yükleyebilir, G-code çıktısını tek tuşla kaydedebilirsiniz.
+- Konturlar oluşturulmadan önce tahmini boyut ve çizim uzunluğu için ön izleme sağlar.
 
 ## Kurulum
 
@@ -75,7 +75,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
    Rename-Item Pen-Plotter-main Pen-Plotter -Force
    ```
 
-   Komutlar tamamlandığında masaüstünüzde `Pen-Plotter` adlı klasör oluşur ve içinde `plotter_gui.py`, `single_file_plotter.py`, `requirements.txt` ile `pen_plotter` klasörünü görmelisiniz. Eğer farklı bir klasör adı oluşursa (örneğin `Pen-Plotter-main`), onu sağ tıklayıp **Rename** ile `Pen-Plotter` olarak değiştirin.
+   Komutlar tamamlandığında masaüstünüzde `Pen-Plotter` adlı klasör oluşur ve içinde `plotter_gui.py`, `requirements.txt` ve `pen_plotter` klasörünü görmelisiniz. Eğer farklı bir klasör adı oluşursa (örneğin `Pen-Plotter-main`), onu sağ tıklayıp **Rename** ile `Pen-Plotter` olarak değiştirin.
 8. PowerShell penceresinde projenin içine girin:
 
    ```powershell
@@ -91,57 +91,16 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
    İsterseniz aynı klasördeki `plotter_gui.py` dosyasına çift tıklayarak da çalıştırabilirsiniz; program açıldığında kapanmaması için bu komut penceresi açık kalacaktır.
 
 10. Açılan pencerede şu adımları uygulayın:
-    - **Font Aç** butonuna tıklayıp istediğiniz `.ttf` veya `.otf` dosyasını seçin (ör. `C:\Users\cangu\Desktop\Fontlar\el_yazisi.ttf`).
-    - Sol kutuya yazmak istediğiniz metni girin; sağdaki kare ızgarada önizleme hemen güncellenecektir.
-    - Gerekirse font boyutu, satır aralığı, harf aralığı ve eğri toleransı değerlerini değiştirin.
-    - Seyahat/drawing hızları ve Z yüksekliği gibi G-code parametrelerini alt bölümden düzenleyin.
-    - **G-code Kaydet** butonuna bastığınızda, varsayılan olarak masaüstünüze kaydedilecek `.gcode` dosyasının adını belirleyin.
+    - **TTF font seç** butonuna tıklayıp istediğiniz `.ttf` veya `.otf` dosyasını seçin (ör. `C:\Users\cangu\Desktop\Fontlar\el_yazisi.ttf`).
+    - Sol paneldeki **Metin bloğu ekle** butonu ile istediğiniz kadar blok oluşturun; her blokta font boyutu, satır aralığı ve harf aralığı farklı olabilir.
+    - Sağdaki ızgaradan blokları fareyle sürükleyerek yatak sınırları içinde yerleştirin; ölçümler hemen güncellenir.
+    - Üst kısımdaki Bed/Pen ayarlarından yatak boyutu, pen offset, pen yukarı/aşağı değerleri ile boşta/çizim hızlarını milimetre/saniye cinsinden girin.
+    - **Projeyi kaydet** diyerek tüm parametreleri `.json` olarak saklayabilir, **Projeyi aç** ile tekrar yükleyebilirsiniz.
+    - **G-code kaydet** butonuyla oluşturulan yolları kaydedip cihazınıza aktarabilirsiniz; pen offset değeri otomatik uygulanır.
 
 11. Kaydedilen G-code'u pen plotter veya 3B yazıcı yazılımınıza aktarın.
 
 > **İpucu:** Uygulamada **Metni merkezde hizala** seçeneği işaretliyse önizlemede gördüğünüz hizalama aynen G-code çıktısına da uygulanır. Origin X/Y alanlarını kullanarak çıktıyı çalışma yüzeyinizdeki referans noktasına kaydırabilirsiniz.
-
-## Tek Dosyalık Kullanım (Kopyala & Çalıştır)
-
-Komut satırı ve depo yapısıyla uğraşmak istemiyorsanız `single_file_plotter.py`
-dosyasını açıp içeriğini olduğu gibi kopyalayabilirsiniz. Ardından şu adımları
-izleyin:
-
-1. Bilgisayarınızda Python 3 kurulu olduğundan emin olun.
-2. Boş bir klasör oluşturun ve içerisine yeni bir metin dosyası açıp
-   `plotter.py` adıyla kaydedin.
-3. Bu depodaki `single_file_plotter.py` dosyasının tamamını kopyalayıp
-   `plotter.py` dosyasına yapıştırın.
-4. Terminali/komut istemcisini açıp dosyanın olduğu klasöre gelin.
-5. Gerekli tek kütüphaneyi kurun:
-
-   ```bash
-   pip install fonttools
-   ```
-
-6. Kendi metninizi ve font yolunuzu kullanarak G-code üretin:
-
-   ```bash
-   python plotter.py --text "Merhaba" --font "C:/Fonts/BenimFontum.ttf" --output merhaba.gcode --preview --center
-   ```
-
-Komut sonrasında `merhaba.gcode` dosyası aynı klasörde oluşur. Farklı ayarlar
-için `python plotter.py --help` komutunu çalıştırabilirsiniz.
-
-## Windows ZIP paketini elle oluşturma
-
-GitHub depo geçmişine ikili (binary) dosyalar eklemek istemiyorsanız, bu repodaki
-`scripts/build_windows_bundle.py` betiğini kullanarak ihtiyaç duyulan dosyaları
-tek seferde paketleyebilirsiniz. Depo kökünde aşağıdaki komutu çalıştırmanız
-yeterlidir:
-
-```bash
-python scripts/build_windows_bundle.py
-```
-
-Komut çalıştıktan sonra `dist/PenPlotter-Windows.zip` dosyası oluşur. Bu arşiv,
-Windows kullanıcılarının doğrudan `C:\Users\<kullanıcı>\Desktop\Pen-Plotter`
-klasörüne çıkarıp kullanabileceği GUI, paket modülleri ve gereksinimleri içerir.
 
 ## Geliştirme
 
