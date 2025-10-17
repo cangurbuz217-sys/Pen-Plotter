@@ -843,7 +843,9 @@ def _smooth_paths(paths: List[Path], tolerance: float) -> List[Path]:
 
         simplified = _simplify_path(points, simplify_tolerance)
         if len(simplified) < 2:
-            continue
+            simplified = list(path)
+            if len(simplified) < 2:
+                continue
 
         deduped: Path = [simplified[0]]
         for pt in simplified[1:]:
@@ -856,10 +858,16 @@ def _smooth_paths(paths: List[Path], tolerance: float) -> List[Path]:
                 deduped.append(pt)
 
         if len(deduped) < 2:
-            continue
+            deduped = simplified
+            if len(deduped) < 2:
+                deduped = list(path)
+                if len(deduped) < 2:
+                    continue
 
         spacing = max(tolerance * 0.75, 0.4)
         resampled = _resample_path(deduped, spacing)
+        if len(resampled) < 2:
+            resampled = deduped
         if len(resampled) >= 2:
             smoothed.append(resampled)
 
