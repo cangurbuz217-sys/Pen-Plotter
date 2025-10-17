@@ -95,6 +95,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
     - Sol paneldeki **Metin bloğu ekle** butonu ile istediğiniz kadar blok oluşturun; her blokta font boyutu, satır aralığı ve harf aralığı farklı olabilir.
     - Sağdaki ızgaradan blokları fareyle sürükleyerek yatak sınırları içinde yerleştirin; ölçümler hemen güncellenir.
     - Üst kısımdaki Bed/Pen ayarlarından yatak boyutu, pen offset, pen yukarı/aşağı değerleri ile boşta/çizim hızlarını milimetre/saniye cinsinden girin.
+    - **Kalemi yukarı** ve **Kalemi aşağı** butonları mevcut değerlerle oluşacak G-code komutunu gösterir ve panoya kopyalar; cihazınızda manuel test yapmak için kullanabilirsiniz.
     - **Projeyi kaydet** diyerek tüm parametreleri `.json` olarak saklayabilir, **Projeyi aç** ile tekrar yükleyebilirsiniz.
     - **G-code kaydet** butonuyla oluşturulan yolları kaydedip cihazınıza aktarabilirsiniz; pen offset değeri otomatik uygulanır.
 
