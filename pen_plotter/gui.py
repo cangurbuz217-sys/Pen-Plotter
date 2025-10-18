@@ -504,9 +504,8 @@ else:
                 command=self.add_block,
             ).grid(column=0, row=0, sticky="ew", pady=(0, 8))
 
-            self.blocks_container = ttk.Frame(blocks_panel)
-            self.blocks_container.grid(column=0, row=1, sticky="nsew")
-            self.blocks_container.columnconfigure(0, weight=1)
+            blocks_scroll, self.blocks_container = self._create_scrollable_container(blocks_panel)
+            blocks_scroll.grid(column=0, row=1, sticky="nsew")
 
             shapes_frame = ttk.LabelFrame(font_frame, text="Şekiller")
             shapes_frame.grid(column=0, row=3, sticky="nsew", pady=(12, 0))
@@ -533,9 +532,8 @@ else:
                 command=lambda: self.add_shape("arrow"),
             ).grid(column=2, row=0, sticky="ew", padx=(4, 0))
 
-            self.shapes_container = ttk.Frame(shapes_frame)
-            self.shapes_container.grid(column=0, row=1, sticky="nsew")
-            self.shapes_container.columnconfigure(0, weight=1)
+            shapes_scroll, self.shapes_container = self._create_scrollable_container(shapes_frame)
+            shapes_scroll.grid(column=0, row=1, sticky="nsew")
 
             preview_frame = ttk.Frame(main)
             preview_frame.grid(column=1, row=0, sticky="nsew")
@@ -618,6 +616,65 @@ else:
             entry = ttk.Entry(parent, textvariable=self.hardware_vars[key], width=10)
             entry.grid(column=column, row=row * 2 + 1, sticky="ew", padx=(0, 8), pady=(0, 4))
             entry.bind("<KeyRelease>", lambda _event: self.schedule_preview())
+
+        def _create_scrollable_container(
+            self, parent: tk.Widget
+        ) -> Tuple[ttk.Frame, ttk.Frame]:
+            outer = ttk.Frame(parent)
+            outer.columnconfigure(0, weight=1)
+            outer.rowconfigure(0, weight=1)
+
+            canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
+            canvas.grid(column=0, row=0, sticky="nsew")
+
+            scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+            scrollbar.grid(column=1, row=0, sticky="ns")
+            canvas.configure(yscrollcommand=scrollbar.set)
+
+            container = ttk.Frame(canvas)
+            container.columnconfigure(0, weight=1)
+            window_id = canvas.create_window((0, 0), window=container, anchor="nw")
+
+            def _update_scrollregion(_event: tk.Event) -> None:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                canvas.itemconfigure(window_id, width=canvas.winfo_width())
+
+            container.bind("<Configure>", _update_scrollregion)
+            canvas.bind(
+                "<Configure>",
+                lambda _event: canvas.itemconfigure(window_id, width=canvas.winfo_width()),
+            )
+
+            self._bind_scroll_events(canvas, outer)
+
+            return outer, container
+
+        def _bind_scroll_events(self, canvas: tk.Canvas, widget: tk.Widget) -> None:
+            def _on_mousewheel(event: tk.Event) -> None:
+                if event.delta:
+                    canvas.yview_scroll(int(-event.delta / 120), "units")
+                else:
+                    direction = -1 if getattr(event, "num", 0) == 4 else 1
+                    canvas.yview_scroll(direction, "units")
+
+            def _on_button4(_event: tk.Event) -> None:
+                canvas.yview_scroll(-1, "units")
+
+            def _on_button5(_event: tk.Event) -> None:
+                canvas.yview_scroll(1, "units")
+
+            def _bind(_event: tk.Event) -> None:
+                canvas.bind_all("<MouseWheel>", _on_mousewheel)
+                canvas.bind_all("<Button-4>", _on_button4)
+                canvas.bind_all("<Button-5>", _on_button5)
+
+            def _unbind(_event: tk.Event) -> None:
+                canvas.unbind_all("<MouseWheel>")
+                canvas.unbind_all("<Button-4>")
+                canvas.unbind_all("<Button-5>")
+
+            widget.bind("<Enter>", _bind)
+            widget.bind("<Leave>", _unbind)
 
         # ---------------------------------------------------------- Block mgmt --
         def add_block(self, initial_text: str = "") -> None:
