@@ -1,0 +1,4 @@
+dist/*.zip
+*.pyc
+__pycache__/
+.venv/
