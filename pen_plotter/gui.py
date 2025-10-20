@@ -10,11 +10,12 @@ from typing import Dict, List, Optional, Tuple
 
 try:  # pragma: no cover - import guard for headless environments
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
 except Exception:  # pragma: no cover - Tk is optional during tests
     tk = None  # type: ignore[assignment]
     filedialog = None  # type: ignore[assignment]
     messagebox = None  # type: ignore[assignment]
+    simpledialog = None  # type: ignore[assignment]
     ttk = None  # type: ignore[assignment]
 
 from .font_paths import FontLoader, LayoutSettings, layout_text
@@ -72,6 +73,20 @@ else:
                 command=lambda: app.remove_block(self),
             ).pack(side="right")
 
+            pen_frame = ttk.Frame(self.frame)
+            pen_frame.pack(fill="x", pady=(0, 6))
+            ttk.Button(
+                pen_frame,
+                text="Kalem aşağı ekle",
+                command=self._prompt_pen_down,
+            ).pack(side="left")
+            self.pen_down_var = tk.StringVar(value="Kalem aşağı: varsayılan")
+            self.pen_down_label = ttk.Label(
+                pen_frame,
+                textvariable=self.pen_down_var,
+            )
+            self.pen_down_label.pack(side="left", padx=(8, 0))
+
             controls = ttk.Frame(self.frame)
             controls.pack(fill="x", pady=(0, 6))
             controls.columnconfigure(0, weight=1)
@@ -117,6 +132,8 @@ else:
             self.local_bounds: Optional[Tuple[float, float, float, float]] = None
             self.current_bounds: Optional[Tuple[float, float, float, float]] = None
             self.color = "#1f77b4"
+            self.pen_down_override: Optional[float] = None
+            self._update_pen_label()
 
         def _on_text_modified(self, _event: tk.Event) -> None:
             if self.text_widget.edit_modified():
@@ -126,6 +143,68 @@ else:
         def set_display_index(self, index: int, color: str) -> None:
             self.header_var.set(f"Metin Bloğu {index}")
             self.color = color
+            if hasattr(self, "pen_down_label"):
+                try:
+                    self.pen_down_label.configure(foreground=color)
+                except tk.TclError:
+                    pass
+
+        def _update_pen_label(self) -> None:
+            if self.pen_down_override is None:
+                self.pen_down_var.set("Kalem aşağı: varsayılan")
+            else:
+                self.pen_down_var.set(
+                    f"Kalem aşağı: {self.app._fmt(self.pen_down_override)} mm"
+                )
+
+        def set_pen_down_override(self, value: Optional[float]) -> None:
+            self.pen_down_override = value
+            self._update_pen_label()
+
+        def _prompt_pen_down(self) -> None:
+            if simpledialog is None:
+                self.app.status_var.set(
+                    "Kalem aşağı değeri için giriş penceresi açılamıyor."
+                )
+                return
+            initial = (
+                ""
+                if self.pen_down_override is None
+                else self.app._fmt(self.pen_down_override)
+            )
+            response = simpledialog.askstring(
+                "Kalem aşağı ekle",
+                (
+                    "Bu blok için kalem aşağı yüksekliği (mm) girin.\n"
+                    "Varsayılan değeri kullanmak için boş bırakın."
+                ),
+                initialvalue=initial,
+                parent=self.app.root,
+            )
+            if response is None:
+                return
+            value_str = response.strip()
+            if not value_str:
+                self.set_pen_down_override(None)
+                self.app.status_var.set(
+                    "Kalem aşağı değeri varsayılan ayarlara döndürüldü."
+                )
+                self.app.schedule_preview()
+                return
+            try:
+                parsed = float(value_str.replace(",", "."))
+            except ValueError:
+                self.app.status_var.set("Kalem aşağı değeri sayı olmalıdır.")
+                if messagebox is not None:
+                    messagebox.showerror(
+                        "Geçersiz değer", "Lütfen sayısal bir kalem aşağı değeri girin."
+                    )
+                return
+            self.set_pen_down_override(parsed)
+            self.app.status_var.set(
+                f"Kalem aşağı değeri {self.app._fmt(parsed)} mm olarak ayarlandı."
+            )
+            self.app.schedule_preview()
 
         def update_position_label(self) -> None:
             self.position_var.set(
@@ -253,6 +332,7 @@ else:
         char_spacing: float
         translation: Tuple[float, float]
         rotation: float
+        pen_down: Optional[float]
 
     @dataclass
     class _ShapeRequest:
@@ -273,6 +353,7 @@ else:
         rotation: float
         center: Tuple[float, float]
         handle_point: Tuple[float, float]
+        pen_down: Optional[float]
 
     @dataclass
     class _ShapePreviewData:
@@ -310,6 +391,7 @@ else:
         block_results: List[_BlockPreviewData]
         shape_results: List[_ShapePreviewData]
         all_paths: List[PathType]
+        path_pen_down: List[Optional[float]]
         metrics: Tuple[float, float, float, float, float]
         total_length: float
         settings: PlotterSettings
@@ -387,6 +469,7 @@ else:
             self.preview_settings: Optional[PlotterSettings] = None
             self.preview_metrics: Optional[Tuple[float, float, float, float, float]] = None
             self.preview_pen_offset = (0.0, 0.0)
+            self.preview_path_heights: List[Optional[float]] = []
             self.current_bed_size = (
                 self.hardware_defaults_float["bed_x"],
                 self.hardware_defaults_float["bed_y"],
@@ -882,6 +965,7 @@ else:
                         char_spacing=char_spacing,
                         translation=(block.translation_x, block.translation_y),
                         rotation=block.rotation_deg,
+                        pen_down=block.pen_down_override,
                     )
                 )
 
@@ -932,6 +1016,7 @@ else:
                 block_results: List[_BlockPreviewData] = []
                 shape_results: List[_ShapePreviewData] = []
                 all_paths: List[PathType] = []
+                path_pen_down: List[Optional[float]] = []
                 total_length = 0.0
 
                 def _rotate_paths(
@@ -1018,9 +1103,11 @@ else:
                                 rotation=request.rotation,
                                 center=center_world,
                                 handle_point=handle_point,
+                                pen_down=request.pen_down,
                             )
                         )
                         all_paths.extend(transformed_paths)
+                        path_pen_down.extend([request.pen_down] * len(transformed_paths))
                         total_length += length
 
                 for shape_request in inputs.shapes:
@@ -1069,6 +1156,7 @@ else:
                         )
                     )
                     all_paths.extend(transformed_paths)
+                    path_pen_down.extend([None] * len(transformed_paths))
                     total_length += length
 
                 if not all_paths:
@@ -1089,6 +1177,7 @@ else:
                     block_results=block_results,
                     shape_results=shape_results,
                     all_paths=all_paths,
+                    path_pen_down=path_pen_down,
                     metrics=combined_metrics,
                     total_length=total_length,
                     settings=settings,
@@ -1116,6 +1205,7 @@ else:
             self.preview_settings = data.settings
             self.preview_metrics = data.metrics
             self.preview_pen_offset = (inputs.pen_offset_x, inputs.pen_offset_y)
+            self.preview_path_heights = data.path_pen_down
             self.current_bed_size = (inputs.bed_x, inputs.bed_y)
 
             self.item_bounds_mm.clear()
@@ -1232,6 +1322,7 @@ else:
             self.preview_paths = []
             self.preview_settings = None
             self.preview_metrics = None
+            self.preview_path_heights = []
             self.item_bounds_mm.clear()
             self.item_centers_mm.clear()
             self.item_handles_mm.clear()
@@ -1577,6 +1668,16 @@ else:
                         block.char_spacing_var.set(self._fmt(float(char_spacing)))
                     elif isinstance(char_spacing, str):
                         block.char_spacing_var.set(char_spacing)
+                    pen_down_entry = entry.get("pen_down")
+                    if isinstance(pen_down_entry, (int, float)):
+                        block.set_pen_down_override(float(pen_down_entry))
+                    elif isinstance(pen_down_entry, str):
+                        try:
+                            block.set_pen_down_override(float(pen_down_entry))
+                        except ValueError:
+                            block.set_pen_down_override(None)
+                    else:
+                        block.set_pen_down_override(None)
                     translation = entry.get("translation")
                     if (
                         isinstance(translation, (list, tuple))
@@ -1663,14 +1764,29 @@ else:
             if not file_path:
                 return
             pen_offset_x, pen_offset_y = self.preview_pen_offset
-            paths_for_output: List[PathType]
+            heights_for_output: List[Optional[float]] = list(self.preview_path_heights)
             if pen_offset_x or pen_offset_y:
-                paths_for_output = translate_paths(
-                    self.preview_paths, pen_offset_x, pen_offset_y
-                )
+                paths_for_output = [
+                    [
+                        (x + pen_offset_x, y + pen_offset_y)
+                        for (x, y) in path
+                    ]
+                    for path in self.preview_paths
+                ]
             else:
                 paths_for_output = [list(path) for path in self.preview_paths]
-            gcode_lines = paths_to_gcode(paths_for_output, self.preview_settings)
+            if len(heights_for_output) < len(paths_for_output):
+                heights_for_output.extend(
+                    [None] * (len(paths_for_output) - len(heights_for_output))
+                )
+            height_payload = (
+                heights_for_output
+                if any(height is not None for height in heights_for_output)
+                else None
+            )
+            gcode_lines = paths_to_gcode(
+                paths_for_output, self.preview_settings, height_payload
+            )
             Path(file_path).write_text("\n".join(gcode_lines) + "\n", encoding="utf-8")
             self.status_var.set(f"G-code kaydedildi: {file_path}")
             if messagebox is not None:
@@ -1976,6 +2092,11 @@ else:
                         "character_spacing": block.char_spacing_var.get(),
                         "translation": [block.translation_x, block.translation_y],
                         "rotation": block.rotation_deg,
+                        "pen_down": (
+                            self._fmt(block.pen_down_override)
+                            if block.pen_down_override is not None
+                            else None
+                        ),
                     }
                 )
             shapes_payload = []

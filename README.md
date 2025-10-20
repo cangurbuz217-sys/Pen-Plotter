@@ -96,6 +96,7 @@ python -m pen_plotter.cli "Merhaba Dünya" --font /path/to/font.ttf --output mer
 10. Açılan pencerede şu adımları uygulayın:
     - **TTF font seç** butonuna tıklayıp istediğiniz `.ttf` veya `.otf` dosyasını seçin (ör. `C:\Users\cangu\Desktop\Fontlar\el_yazisi.ttf`).
     - Sol paneldeki **Metin bloğu ekle** butonu ile istediğiniz kadar blok oluşturun; her blokta font boyutu, satır aralığı ve harf aralığı farklı olabilir.
+    - Her metin bloğunun üstündeki **Kalem aşağı ekle** butonuyla o bloğa özel yazma yüksekliği belirleyebilir veya alanı boş bırakarak global pen aşağı değerine geri dönebilirsiniz.
     - **Şekiller** bölümünden dikdörtgen, çizgi veya yön oku ekleyin; boyutlarını milimetre cinsinden girip metinler gibi sahnede sürükleyip bırakabilir veya sahnedeki beyaz köşe/ucu tutamaçlarını çekerek yeniden boyutlandırabilirsiniz.
     - Sağdaki ızgaradan metin ve şekilleri fareyle sürükleyerek yatak sınırları içinde yerleştirin; her öğenin üstündeki turuncu tutamaçı fareyle sürükleyerek istediğiniz açıya döndürebilir, seçili öğede beliren beyaz tutamaçlarla ölçülerini ayarlayabilirsiniz. Önizleme, öğe yatak dışına taşarsa kırmızı bir uyarı gösterir.
     - Üst kısımdaki Bed/Pen ayarlarından yatak boyutu, pen offset, ilk yaklaşma ve pen yukarı/aşağı değerleri ile boşta/çizim hızlarını milimetre/saniye cinsinden girin; pen offset için turuncu kılavuz çizgileri çalışma alanında görüntülenir.
